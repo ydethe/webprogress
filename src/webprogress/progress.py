@@ -13,17 +13,14 @@ class tqdm_webprogress(tqdm_auto):
         ----------
         key: str, required. Slack token
             [default: ${WEBPROGRESS_KEY}].
-        host: str, required. Slack channel
-            [default: ${WEBPROGRESS_HOST}].
-        port  : int, required. Slack channel
-            [default: ${WEBPROGRESS_PORT}].
+        endpoint: str, required. Slack channel
+            [default: ${WEBPROGRESS_ENDPOINT}].
 
         See `tqdm.auto.tqdm.__init__` for other parameters.
         """
         kwargs = kwargs.copy()
         self.__key = kwargs.pop("key", getenv("WEBPROGRESS_KEY"))
-        self.__host = kwargs.pop("host", getenv("WEBPROGRESS_HOST"))
-        self.__port = kwargs.pop("port", getenv("WEBPROGRESS_PORT"))
+        self.__endpoint = kwargs.pop("endpoint", getenv("WEBPROGRESS_ENDPOINT"))
 
         super().__init__(*args, **kwargs)
 
@@ -36,9 +33,9 @@ class tqdm_webprogress(tqdm_auto):
             progress=self.format_dict["n"],
             total=self.format_dict["total"],
             description=self.format_dict["prefix"],
-            webprogress_key=self.__key,
+            key=self.__key,
         )
-        requests.post(url=f"{self.__host}:{self.__port}/handler", json=p.model_dump())
+        requests.post(url=f"{self.__endpoint}/handler", json=p.model_dump())
 
     def clear(self, *args, **kwargs):
         super().clear(*args, **kwargs)

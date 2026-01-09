@@ -5,4 +5,4 @@ class ClientPayload(BaseModel):
     progress: float
     total: float
     description: str
-    webprogress_key: str
+    key: str
