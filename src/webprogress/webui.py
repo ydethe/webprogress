@@ -1,31 +1,25 @@
 import time
 from nicegui import Event, app, ui
 
+from .models import ClientPayload
 
-sensor = Event[float]()
 
-@app.post("/sensor")
-def sensor_webhook(temperature: float):
-    sensor.emit(temperature)
+payload_handler = Event[ClientPayload]()
+
+
+@app.post("/handler")
+def sensor_webhook(payload: ClientPayload):
+    payload_handler.emit(payload)
 
 
 def root():
-    chart = ui.echart(
-        {
-            "xAxis": {"type": "time", "axisLabel": {"hideOverlap": True}},
-            "yAxis": {"type": "value", "min": "dataMin"},
-            "series": [{"type": "line", "data": [], "smooth": True}],
-        }
-    )
+    progress_bar = ui.linear_progress()
 
-    def update_chart(temperature: float):
-        data = chart.options["series"][0]["data"]
-        data.append([time.time(), temperature])
-        if len(data) > 10:
-            data.pop(0)
+    def update_pb(payload: ClientPayload):
+        progress_bar.value = payload.progress / payload.total
 
-    sensor.subscribe(update_chart)
+    payload_handler.subscribe(update_pb)
 
 
 def run():
-    ui.run(root, port=8775)
+    ui.run(root, port=8775, reload=False)
