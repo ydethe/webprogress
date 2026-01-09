@@ -24,8 +24,8 @@ class tqdm_webprogress(tqdm_auto):
 
         super().__init__(*args, **kwargs)
 
-    def display(self, **kwargs):
-        super().display(**kwargs)
+    def display(self, msg: str | None = None, pos: int | None = None):
+        super().display(msg, pos)
 
         self.format_meter(**self.format_dict)
 

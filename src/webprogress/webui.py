@@ -1,4 +1,3 @@
-import time
 from nicegui import Event, app, ui
 
 from .models import ClientPayload
