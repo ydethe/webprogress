@@ -8,7 +8,7 @@ from tqdm.auto import tqdm as tqdm_auto
 from .models import ClientPayload
 
 
-class tqdm_webprogress(tqdm_auto):
+class tqdm(tqdm_auto):
     def __init__(self, *args, **kwargs):
         """
         Parameters
@@ -57,8 +57,8 @@ class tqdm_webprogress(tqdm_auto):
             payload_data["colour"] = "#0000ff"
 
         p = ClientPayload(
-            hostname=socket.gethostname(),
-            username=getpass.getuser(),
+            user_hostname=socket.gethostname(),
+            user_login=getpass.getuser(),
             progress=payload_data["n"],
             total=payload_data["total"],
             description=payload_data["prefix"],
@@ -71,7 +71,10 @@ class tqdm_webprogress(tqdm_auto):
             colour=payload_data["colour"],
             key=self.__key,
         )
-        requests.post(url=f"{self.__endpoint}/handler", json=p.model_dump())
+        try:
+            requests.post(url=f"{self.__endpoint}/handler", json=p.model_dump(), timeout=0.5)
+        except requests.exceptions.ConnectTimeout:
+            pass
 
     def clear(self, *args, **kwargs):
         super().clear(*args, **kwargs)

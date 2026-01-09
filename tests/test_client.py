@@ -1,10 +1,10 @@
 import time
 
-from webprogress.progress import tqdm_webprogress
+from webprogress import tqdm
 
 
 def test_client():
-    for a in tqdm_webprogress(range(10), desc="foo", key="", endpoint="http://127.0.0.1:8775"):
+    for a in tqdm(range(10), desc="foo", key="", endpoint="http://127.0.0.1:8775"):
         time.sleep(1)
 
 

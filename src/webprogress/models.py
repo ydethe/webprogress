@@ -1,11 +1,15 @@
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 from pydantic import BaseModel
 
 
 class ClientPayload(BaseModel):
     #: Client's hostname
-    hostname: str
+    user_hostname: str
     #: Client's username
-    username: str
+    user_login: str
+    #: Client's username
+    user_src_address: Optional[str] = ""
     #: Number of finished iterations
     progress: float | int
     # The number of expected iterations. If unspecified,
@@ -40,3 +44,11 @@ class ClientPayload(BaseModel):
     colour: str
     #: Access key to webprogress server
     key: str
+
+    @property
+    def remaining_time(self) -> float:
+        return (self.total - self.progress) / self.rate
+
+    @property
+    def eta(self) -> datetime:
+        return datetime.now(timezone.utc) + timedelta(seconds=self.remaining_time)

@@ -1,4 +1,4 @@
-from webprogress.webui import run
+from webprogress.server import run
 
 
 def test_server():

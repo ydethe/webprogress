@@ -1,4 +1,5 @@
 from nicegui import Event, app, ui
+from fastapi import Request
 
 from .models import ClientPayload
 
@@ -7,11 +8,13 @@ payload_handler = Event[ClientPayload]()
 
 
 @app.post("/handler")
-def sensor_webhook(payload: ClientPayload):
+def sensor_webhook(payload: ClientPayload, request: Request):
+    if request.client is not None:
+        payload.user_src_address = request.client.host
     payload_handler.emit(payload)
 
 
-def root():
+def root(request: Request):
     progress_bar = ui.linear_progress()
 
     def update_pb(payload: ClientPayload):
