@@ -13,12 +13,10 @@ WORKDIR /app
 
 # The package version is derived from git tags via SCM, so .git must be present
 # at build time for the install to succeed.
-COPY pyproject.toml uv.lock README.md ./
-COPY .git ./.git
-COPY src ./src
+COPY dist/*.whl .
 
 # Install only runtime dependencies (no dev/test/doc groups) into /app/.venv.
-RUN uv sync --frozen --no-dev
+RUN uv pip install --system ./*.whl
 
 # NiceGUI serves on 8775 (see server.run()).
 EXPOSE 8775
