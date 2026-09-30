@@ -42,7 +42,8 @@ class ClientPayload(BaseModel):
     initial: float | int
     #: Bar colour (e.g. 'green', '#00ff00').
     colour: str
-    #: Access key to webprogress server
+    #: Client token authenticating the sender and routing updates to their
+    #: dashboard. The server resolves it to a user; it is not a display field.
     key: str
 
     @property

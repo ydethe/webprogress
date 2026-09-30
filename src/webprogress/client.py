@@ -13,9 +13,10 @@ class tqdm(tqdm_auto):
         """
         Parameters
         ----------
-        key: str, required. Slack token
+        key: str, required. webprogress client token (generated in the web UI
+            after logging in). Routes updates to your dashboard.
             [default: ${WEBPROGRESS_KEY}].
-        endpoint: str, required. Slack channel
+        endpoint: str, required. Base URL of the webprogress server.
             [default: ${WEBPROGRESS_ENDPOINT}].
 
         See `tqdm.auto.tqdm.__init__` for other parameters.
@@ -73,7 +74,8 @@ class tqdm(tqdm_auto):
         )
         try:
             requests.post(url=f"{self.__endpoint}/handler", json=p.model_dump(), timeout=0.5)
-        except requests.exceptions.ConnectTimeout:
+        except requests.exceptions.RequestException:
+            # Never let a down, slow, or rejecting server break the tracked loop.
             pass
 
     def clear(self, *args, **kwargs):
