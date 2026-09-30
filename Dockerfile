@@ -22,4 +22,4 @@ RUN uv pip install --system ./*.whl
 EXPOSE 8775
 
 # OIDC and session configuration is supplied at runtime via WEBPROGRESS_* env vars.
-CMD ["uv", "run", "--no-sync", "python", "-c", "from webprogress.server import run; run()"]
+CMD ["uv", "run", "python", "-c", "from webprogress.server import run; run()"]

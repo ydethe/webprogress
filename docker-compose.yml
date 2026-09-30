@@ -1,0 +1,39 @@
+# Sample docker-compose for the webprogress server.
+#
+# Build the wheel into ./dist before `docker compose build`, e.g.:
+#   uv build
+# (the Dockerfile installs from dist/*.whl).
+#
+# Fill in the WEBPROGRESS_* values below, or drop them in a .env file next to
+# this compose file (compose reads .env automatically for ${...} substitution).
+
+services:
+  webprogress:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: webprogress:latest
+    container_name: webprogress
+    restart: unless-stopped
+    ports:
+      - "8775:8775"
+    environment:
+      # --- OIDC (required to start; server.run() validates these) ---
+      WEBPROGRESS_OIDC_CLIENT_ID: "${WEBPROGRESS_OIDC_CLIENT_ID}"
+      WEBPROGRESS_OIDC_CLIENT_SECRET: "${WEBPROGRESS_OIDC_CLIENT_SECRET}"
+      WEBPROGRESS_OIDC_SERVER_METADATA_URL: "${WEBPROGRESS_OIDC_SERVER_METADATA_URL}"
+      # WEBPROGRESS_OIDC_SCOPE: "openid email profile"
+
+      # --- Server ---
+      # Public base URL of this server; used to build the /auth redirect URI.
+      WEBPROGRESS_BASE_URL: "${WEBPROGRESS_BASE_URL:-http://127.0.0.1:8775}"
+      # Strong random value in production, e.g. `openssl rand -hex 32`.
+      WEBPROGRESS_SESSION_SECRET: "${WEBPROGRESS_SESSION_SECRET:-change-me}"
+      # SQLite path inside the container; kept on a volume for persistence.
+      WEBPROGRESS_DB_PATH: "/data/webprogress.db"
+    volumes:
+      # Persist the users/tokens SQLite database across restarts.
+      - webprogress-data:/data
+
+volumes:
+  webprogress-data:
