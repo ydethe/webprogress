@@ -34,9 +34,20 @@ class Settings(BaseSettings):
     #: Path to the SQLite database holding users and tokens.
     db_path: Path = Field(default=Path("webprogress.db"))
 
+    #: Field names whose values must never be printed to the terminal.
+    _SENSITIVE = frozenset({"oidc_client_secret", "session_secret"})
+
     @property
     def redirect_uri(self) -> str:
         return f"{self.base_url.rstrip('/')}/auth"
+
+    def log_config(self) -> None:
+        """Print the resolved server configuration, masking sensitive secrets."""
+        print("webprogress settings:")
+        for name in self.__class__.model_fields:
+            value = "***" if name in self._SENSITIVE else getattr(self, name)
+            print(f"  {name} = {value}")
+        print(f"  redirect_uri = {self.redirect_uri}")
 
     def require_oidc(self) -> None:
         """Raise a clear error if the OIDC provider is not configured."""
@@ -53,3 +64,4 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+settings.log_config()

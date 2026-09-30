@@ -1,0 +1,9 @@
+# Keep .git — the SCM-derived version needs it at build time.
+.venv/
+**/__pycache__/
+**/*.pyc
+htmldoc/
+.pytest_cache/
+.ruff_cache/
+*.db
+.env
