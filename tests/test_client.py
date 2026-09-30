@@ -1,10 +1,11 @@
 import time
 
 from webprogress import tqdm
+from webprogress.config import settings
 
 
 def test_client():
-    for a in tqdm(range(10), desc="foo", key="", endpoint="http://127.0.0.1:8775"):
+    for a in tqdm(range(10), desc="foo", endpoint=settings.base_url):
         time.sleep(1)
 
 
