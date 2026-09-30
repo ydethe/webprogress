@@ -34,8 +34,7 @@ def _connect(path: str | Path) -> sqlite3.Connection:
 def init_db(path: str | Path) -> None:
     """Create the ``users`` and ``tokens`` tables if they do not exist."""
     with _connect(path) as conn:
-        conn.executescript(
-            """
+        conn.executescript("""
             CREATE TABLE IF NOT EXISTS users (
                 sub        TEXT PRIMARY KEY,
                 email      TEXT,
@@ -50,8 +49,7 @@ def init_db(path: str | Path) -> None:
                 created_at TEXT,
                 revoked    INTEGER NOT NULL DEFAULT 0
             );
-            """
-        )
+            """)
 
 
 def upsert_user(path: str | Path, sub: str, email: str, name: str) -> None:
