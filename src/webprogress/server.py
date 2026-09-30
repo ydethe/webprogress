@@ -167,7 +167,7 @@ def run():
         client_id=settings.oidc_client_id,
         client_secret=settings.oidc_client_secret,
         server_metadata_url=settings.oidc_server_metadata_url,
-        client_kwargs={"scope": settings.oidc_scope},
+        client_kwargs={"scope": settings.oidc_scope, "token_endpoint_auth_method": "client_secret_post"},
     )
 
     # AuthMiddleware must sit *inside* NiceGUI's Session/RequestTracking middleware
