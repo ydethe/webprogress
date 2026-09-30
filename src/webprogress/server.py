@@ -26,7 +26,13 @@ _PROVIDER = "oidc"
 oauth = OAuth()
 
 #: Routes reachable without an authenticated session.
-UNRESTRICTED_ROUTES = {"/login", "/auth", "/logout", "/handler"}
+UNRESTRICTED_ROUTES = {"/login", "/auth", "/logout", "/handler", "/health"}
+
+
+@app.get("/health")
+def health():
+    """Liveness probe: returns 200 once the app is up. Used by the container healthcheck."""
+    return {"status": "ok"}
 
 
 @app.post("/handler")

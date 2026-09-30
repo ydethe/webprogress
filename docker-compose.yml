@@ -34,6 +34,7 @@ services:
     volumes:
       # Persist the users/tokens SQLite database across restarts.
       - webprogress-data:/data
+    # Healthcheck is defined in the Dockerfile (probes /health) and inherited here.
 
 volumes:
   webprogress-data:

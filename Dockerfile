@@ -2,6 +2,11 @@
 # The client is a library used elsewhere; it is not run from this image.
 FROM python:3.12-slim
 
+# curl is used by the healthcheck (and handy for debugging inside the container).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
 # uv provides fast, reproducible installs from uv.lock.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
@@ -20,6 +25,10 @@ RUN uv pip install --system ./*.whl
 
 # NiceGUI serves on 8775 (see server.run()).
 EXPOSE 8775
+
+# Probe the unauthenticated /health route so the orchestrator knows when the app is up.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8775/health || exit 1
 
 # OIDC and session configuration is supplied at runtime via WEBPROGRESS_* env vars.
 CMD ["uv", "run", "python", "-c", "from webprogress.server import run; run()"]
