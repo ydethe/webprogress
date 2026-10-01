@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -96,10 +97,11 @@ func TestNotifyConfigCRUD(t *testing.T) {
 	}
 
 	want := notify.Config{
-		Channel:       notify.ChannelPushover,
-		PushoverToken: "tok",
-		PushoverUser:  "usr",
-		StallSeconds:  120,
+		Channel:            notify.ChannelWebhook,
+		WebhookURL:         "https://example.com/hook",
+		WebhookHeaderName:  "Authorization",
+		WebhookHeaderValue: "Bearer tok",
+		StallSeconds:       120,
 	}
 	if err := store.SaveNotifyConfig(ctx, "user-1", want); err != nil {
 		t.Fatalf("SaveNotifyConfig: %v", err)
@@ -134,6 +136,42 @@ func TestNotifyConfigCRUD(t *testing.T) {
 	}
 	if _, ok, _ := store.GetNotifyConfig(ctx, "user-1"); ok {
 		t.Fatal("config still present after clear")
+	}
+}
+
+func TestNotifyConfigMigratesOldSchema(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "old.db")
+
+	// Simulate a DB created before the webhook-header columns existed.
+	old, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	_, err = old.Exec(`CREATE TABLE notify_settings (
+        user_sub TEXT PRIMARY KEY, channel TEXT NOT NULL DEFAULT '',
+        pushover_token TEXT NOT NULL DEFAULT '', pushover_user TEXT NOT NULL DEFAULT '',
+        slack_webhook TEXT NOT NULL DEFAULT '', webhook_url TEXT NOT NULL DEFAULT '',
+        stall_seconds INTEGER NOT NULL DEFAULT 0, updated_at TEXT)`)
+	if err != nil {
+		t.Fatalf("create old schema: %v", err)
+	}
+	old.Close()
+
+	// Open through Store, which should add the missing columns, then use them.
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open (migrate): %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	want := notify.Config{Channel: notify.ChannelWebhook, WebhookURL: "u", WebhookHeaderName: "X-Key", WebhookHeaderValue: "v"}
+	if err := store.SaveNotifyConfig(ctx, "u1", want); err != nil {
+		t.Fatalf("SaveNotifyConfig after migration: %v", err)
+	}
+	got, ok, err := store.GetNotifyConfig(ctx, "u1")
+	if err != nil || !ok || got != want {
+		t.Fatalf("after migration got %+v ok=%v err=%v", got, ok, err)
 	}
 }
 

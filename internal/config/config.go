@@ -33,6 +33,7 @@ type Settings struct {
 	NotifyPushoverUser    string
 	NotifySlackWebhookURL string
 	NotifyWebhookURL      string
+	NotifyWebhookHeader   string // optional "Name: Value" header for the custom webhook
 	NotifyStallSeconds    int
 }
 
@@ -58,6 +59,7 @@ func Load() *Settings {
 		NotifyPushoverUser:    env("WEBPROGRESS_NOTIFY_PUSHOVER_USER", ""),
 		NotifySlackWebhookURL: env("WEBPROGRESS_NOTIFY_SLACK_WEBHOOK_URL", ""),
 		NotifyWebhookURL:      env("WEBPROGRESS_NOTIFY_WEBHOOK_URL", ""),
+		NotifyWebhookHeader:   env("WEBPROGRESS_NOTIFY_WEBHOOK_HEADER", ""),
 		NotifyStallSeconds:    envInt("WEBPROGRESS_NOTIFY_STALL_SECONDS", 0),
 	}
 }
@@ -65,13 +67,16 @@ func Load() *Settings {
 // DefaultNotify is the server-wide fallback notification config, assembled from
 // the WEBPROGRESS_NOTIFY_* env vars. A user's persisted settings override it.
 func (s *Settings) DefaultNotify() notify.Config {
+	headerName, headerValue := notify.ParseHeader(s.NotifyWebhookHeader)
 	return notify.Config{
-		Channel:         notify.Channel(s.NotifyChannel),
-		PushoverToken:   s.NotifyPushoverToken,
-		PushoverUser:    s.NotifyPushoverUser,
-		SlackWebhookURL: s.NotifySlackWebhookURL,
-		WebhookURL:      s.NotifyWebhookURL,
-		StallSeconds:    s.NotifyStallSeconds,
+		Channel:            notify.Channel(s.NotifyChannel),
+		PushoverToken:      s.NotifyPushoverToken,
+		PushoverUser:       s.NotifyPushoverUser,
+		SlackWebhookURL:    s.NotifySlackWebhookURL,
+		WebhookURL:         s.NotifyWebhookURL,
+		WebhookHeaderName:  headerName,
+		WebhookHeaderValue: headerValue,
+		StallSeconds:       s.NotifyStallSeconds,
 	}
 }
 
@@ -120,6 +125,7 @@ func (s *Settings) LogConfig() {
 	log.Printf("  notify_pushover_user = %s", mask(s.NotifyPushoverUser))
 	log.Printf("  notify_slack_webhook_url = %s", mask(s.NotifySlackWebhookURL))
 	log.Printf("  notify_webhook_url = %s", mask(s.NotifyWebhookURL))
+	log.Printf("  notify_webhook_header = %s", mask(s.NotifyWebhookHeader))
 	log.Printf("  notify_stall_seconds = %d", s.NotifyStallSeconds)
 }
 

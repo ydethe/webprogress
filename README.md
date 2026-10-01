@@ -74,6 +74,7 @@ variables (or a `.env` file):
 | `WEBPROGRESS_NOTIFY_PUSHOVER_TOKEN` / `_USER` | Pushover application token and user/group key |
 | `WEBPROGRESS_NOTIFY_SLACK_WEBHOOK_URL` | Slack incoming-webhook URL |
 | `WEBPROGRESS_NOTIFY_WEBHOOK_URL` | Custom webhook URL (receives a JSON event payload) |
+| `WEBPROGRESS_NOTIFY_WEBHOOK_HEADER` | Optional extra header for the custom webhook, as `Name: Value` (e.g. `Authorization: Bearer …`) |
 | `WEBPROGRESS_NOTIFY_STALL_SECONDS` | Alert when a task goes this many seconds without an update (`0` = off) |
 
 ### Notifications
@@ -81,7 +82,8 @@ variables (or a `.env` file):
 The server can alert you out-of-band when a tracked task **completes** or
 **stalls** (goes silent for longer than the stall timeout). Three channels are
 supported: [Pushover](https://pushover.net), a Slack *incoming webhook*, or a
-custom webhook that receives a JSON body (`{event, title, message, task}`).
+custom webhook that receives a JSON body (`{event, title, message, task}`) and
+can carry an optional custom header (e.g. an `Authorization` bearer token).
 
 Configuration is **per user** and lives behind the **Settings** menu in the
 dashboard navigation bar — pick a channel, fill in the credentials, set a stall

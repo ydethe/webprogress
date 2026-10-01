@@ -238,24 +238,28 @@ type dashboardData struct {
 // notifyView is the flattened notification config the Settings form renders and
 // edits. Channel is a plain string so html/template comparisons stay simple.
 type notifyView struct {
-	Channel       string
-	PushoverToken string
-	PushoverUser  string
-	SlackWebhook  string
-	WebhookURL    string
-	StallSeconds  int
-	Persisted     bool // true when these values come from the user's saved settings
+	Channel            string
+	PushoverToken      string
+	PushoverUser       string
+	SlackWebhook       string
+	WebhookURL         string
+	WebhookHeaderName  string
+	WebhookHeaderValue string
+	StallSeconds       int
+	Persisted          bool // true when these values come from the user's saved settings
 }
 
 func toNotifyView(cfg notify.Config, persisted bool) notifyView {
 	return notifyView{
-		Channel:       string(cfg.Channel),
-		PushoverToken: cfg.PushoverToken,
-		PushoverUser:  cfg.PushoverUser,
-		SlackWebhook:  cfg.SlackWebhookURL,
-		WebhookURL:    cfg.WebhookURL,
-		StallSeconds:  cfg.StallSeconds,
-		Persisted:     persisted,
+		Channel:            string(cfg.Channel),
+		PushoverToken:      cfg.PushoverToken,
+		PushoverUser:       cfg.PushoverUser,
+		SlackWebhook:       cfg.SlackWebhookURL,
+		WebhookURL:         cfg.WebhookURL,
+		WebhookHeaderName:  cfg.WebhookHeaderName,
+		WebhookHeaderValue: cfg.WebhookHeaderValue,
+		StallSeconds:       cfg.StallSeconds,
+		Persisted:          persisted,
 	}
 }
 
@@ -323,12 +327,14 @@ func (s *Server) handleTokenRevoke(w http.ResponseWriter, r *http.Request) {
 func notifyConfigFromForm(r *http.Request) notify.Config {
 	stall, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("stall_seconds")))
 	return notify.Config{
-		Channel:         notify.Channel(strings.TrimSpace(r.FormValue("channel"))),
-		PushoverToken:   strings.TrimSpace(r.FormValue("pushover_token")),
-		PushoverUser:    strings.TrimSpace(r.FormValue("pushover_user")),
-		SlackWebhookURL: strings.TrimSpace(r.FormValue("slack_webhook")),
-		WebhookURL:      strings.TrimSpace(r.FormValue("webhook_url")),
-		StallSeconds:    stall,
+		Channel:            notify.Channel(strings.TrimSpace(r.FormValue("channel"))),
+		PushoverToken:      strings.TrimSpace(r.FormValue("pushover_token")),
+		PushoverUser:       strings.TrimSpace(r.FormValue("pushover_user")),
+		SlackWebhookURL:    strings.TrimSpace(r.FormValue("slack_webhook")),
+		WebhookURL:         strings.TrimSpace(r.FormValue("webhook_url")),
+		WebhookHeaderName:  strings.TrimSpace(r.FormValue("webhook_header_name")),
+		WebhookHeaderValue: strings.TrimSpace(r.FormValue("webhook_header_value")),
+		StallSeconds:       stall,
 	}
 }
 

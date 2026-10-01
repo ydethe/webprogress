@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -84,8 +85,26 @@ CREATE TABLE IF NOT EXISTS notify_settings (
     stall_seconds  INTEGER NOT NULL DEFAULT 0,
     updated_at     TEXT
 );`
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+	// Columns added after the initial release; ADD COLUMN on an existing DB is a
+	// no-op we tolerate (SQLite reports a duplicate-column error we ignore).
+	return s.addColumns(
+		"ALTER TABLE notify_settings ADD COLUMN webhook_header_name TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE notify_settings ADD COLUMN webhook_header_value TEXT NOT NULL DEFAULT ''",
+	)
+}
+
+// addColumns runs idempotent ALTER TABLE ... ADD COLUMN statements, ignoring the
+// "duplicate column name" error so startup is safe on an already-migrated DB.
+func (s *Store) addColumns(stmts ...string) error {
+	for _, stmt := range stmts {
+		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return err
+		}
+	}
+	return nil
 }
 
 // UpsertUser creates a user on first sign-in or refreshes email/name on
@@ -171,7 +190,8 @@ func (s *Store) RevokeToken(ctx context.Context, sub, tokenHash string) error {
 // a stored row always takes precedence, even one that disables notifications.
 func (s *Store) GetNotifyConfig(ctx context.Context, sub string) (notify.Config, bool, error) {
 	const q = `
-SELECT channel, pushover_token, pushover_user, slack_webhook, webhook_url, stall_seconds
+SELECT channel, pushover_token, pushover_user, slack_webhook, webhook_url,
+       webhook_header_name, webhook_header_value, stall_seconds
 FROM notify_settings WHERE user_sub = ?`
 	var (
 		cfg     notify.Config
@@ -179,7 +199,8 @@ FROM notify_settings WHERE user_sub = ?`
 	)
 	err := s.db.QueryRowContext(ctx, q, sub).Scan(
 		&channel, &cfg.PushoverToken, &cfg.PushoverUser,
-		&cfg.SlackWebhookURL, &cfg.WebhookURL, &cfg.StallSeconds)
+		&cfg.SlackWebhookURL, &cfg.WebhookURL,
+		&cfg.WebhookHeaderName, &cfg.WebhookHeaderValue, &cfg.StallSeconds)
 	switch {
 	case err == nil:
 		cfg.Channel = notify.Channel(channel)
@@ -195,19 +216,23 @@ FROM notify_settings WHERE user_sub = ?`
 func (s *Store) SaveNotifyConfig(ctx context.Context, sub string, cfg notify.Config) error {
 	const q = `
 INSERT INTO notify_settings
-    (user_sub, channel, pushover_token, pushover_user, slack_webhook, webhook_url, stall_seconds, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    (user_sub, channel, pushover_token, pushover_user, slack_webhook, webhook_url,
+     webhook_header_name, webhook_header_value, stall_seconds, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(user_sub) DO UPDATE SET
-    channel        = excluded.channel,
-    pushover_token = excluded.pushover_token,
-    pushover_user  = excluded.pushover_user,
-    slack_webhook  = excluded.slack_webhook,
-    webhook_url    = excluded.webhook_url,
-    stall_seconds  = excluded.stall_seconds,
-    updated_at     = excluded.updated_at`
+    channel              = excluded.channel,
+    pushover_token       = excluded.pushover_token,
+    pushover_user        = excluded.pushover_user,
+    slack_webhook        = excluded.slack_webhook,
+    webhook_url          = excluded.webhook_url,
+    webhook_header_name  = excluded.webhook_header_name,
+    webhook_header_value = excluded.webhook_header_value,
+    stall_seconds        = excluded.stall_seconds,
+    updated_at           = excluded.updated_at`
 	_, err := s.db.ExecContext(ctx, q,
 		sub, string(cfg.Channel), cfg.PushoverToken, cfg.PushoverUser,
-		cfg.SlackWebhookURL, cfg.WebhookURL, cfg.StallSeconds, now())
+		cfg.SlackWebhookURL, cfg.WebhookURL,
+		cfg.WebhookHeaderName, cfg.WebhookHeaderValue, cfg.StallSeconds, now())
 	return err
 }
 

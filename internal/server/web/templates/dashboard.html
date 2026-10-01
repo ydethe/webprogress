@@ -93,9 +93,16 @@
                        class="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none">
               </div>
 
-              <div data-channel="webhook" class="notify-fields">
+              <div data-channel="webhook" class="notify-fields space-y-2">
                 <input name="webhook_url" value="{{ .Notify.WebhookURL }}" placeholder="https://example.com/hook"
                        class="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none">
+                <div class="flex gap-2">
+                  <input name="webhook_header_name" value="{{ .Notify.WebhookHeaderName }}" placeholder="Header (e.g. Authorization)"
+                         class="w-2/5 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none">
+                  <input name="webhook_header_value" value="{{ .Notify.WebhookHeaderValue }}" placeholder="Value (e.g. Bearer …)"
+                         class="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none">
+                </div>
+                <p class="text-xs text-slate-500">Optional custom header sent with the webhook request.</p>
               </div>
 
               <label class="block text-xs font-medium text-slate-400">Stall timeout — seconds, 0 = off

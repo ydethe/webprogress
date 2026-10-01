@@ -44,6 +44,10 @@ type Config struct {
 	PushoverUser    string // Pushover user/group key
 	SlackWebhookURL string // Slack incoming-webhook URL
 	WebhookURL      string // custom webhook URL (receives the JSON in WebhookPayload)
+	// WebhookHeaderName/Value is an optional extra HTTP header sent with the
+	// custom webhook request (e.g. "Authorization: Bearer …"). Empty name = none.
+	WebhookHeaderName  string
+	WebhookHeaderValue string
 	// StallSeconds is how long a task may go without an update before it is
 	// reported as stalled. Zero disables stall notifications; completion
 	// notifications fire regardless.
@@ -148,19 +152,23 @@ func sendSlack(ctx context.Context, client *http.Client, cfg Config, msg Message
 	if msg.Body != "" {
 		text += "\n" + msg.Body
 	}
-	return postJSON(ctx, client, cfg.SlackWebhookURL, map[string]string{"text": text}, "slack")
+	return postJSON(ctx, client, cfg.SlackWebhookURL, map[string]string{"text": text}, nil, "slack")
 }
 
 func sendWebhook(ctx context.Context, client *http.Client, cfg Config, msg Message) error {
+	var headers map[string]string
+	if cfg.WebhookHeaderName != "" {
+		headers = map[string]string{cfg.WebhookHeaderName: cfg.WebhookHeaderValue}
+	}
 	return postJSON(ctx, client, cfg.WebhookURL, WebhookPayload{
 		Event:   msg.Event,
 		Title:   msg.Title,
 		Message: msg.Body,
 		Task:    msg.Task,
-	}, "webhook")
+	}, headers, "webhook")
 }
 
-func postJSON(ctx context.Context, client *http.Client, rawURL string, body any, label string) error {
+func postJSON(ctx context.Context, client *http.Client, rawURL string, body any, headers map[string]string, label string) error {
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return err
@@ -170,6 +178,9 @@ func postJSON(ctx context.Context, client *http.Client, rawURL string, body any,
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 	return do(client, req, label)
 }
 
@@ -183,4 +194,15 @@ func do(client *http.Client, req *http.Request, label string) error {
 		return fmt.Errorf("%s: unexpected status %d", label, resp.StatusCode)
 	}
 	return nil
+}
+
+// ParseHeader splits a "Name: Value" header string into its name and value,
+// trimming surrounding spaces. An empty or colon-less string yields two empty
+// strings. Used to accept the webhook header from a single env var.
+func ParseHeader(s string) (name, value string) {
+	name, value, found := strings.Cut(s, ":")
+	if !found {
+		return "", ""
+	}
+	return strings.TrimSpace(name), strings.TrimSpace(value)
 }

@@ -53,18 +53,62 @@ func TestSendSlack(t *testing.T) {
 
 func TestSendWebhook(t *testing.T) {
 	var got WebhookPayload
+	var authHeader string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader = r.Header.Get("Authorization")
 		_ = json.NewDecoder(r.Body).Decode(&got)
 	}))
 	defer srv.Close()
 
-	cfg := Config{Channel: ChannelWebhook, WebhookURL: srv.URL}
+	cfg := Config{
+		Channel:            ChannelWebhook,
+		WebhookURL:         srv.URL,
+		WebhookHeaderName:  "Authorization",
+		WebhookHeaderValue: "Bearer sekret",
+	}
 	msg := Message{Event: "complete", Title: "done", Body: "all good", Task: TaskInfo{Script: "deploy.sh"}}
 	if err := Send(context.Background(), srv.Client(), cfg, msg); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	if got.Event != "complete" || got.Title != "done" || got.Task.Script != "deploy.sh" {
 		t.Fatalf("webhook payload = %+v", got)
+	}
+	if authHeader != "Bearer sekret" {
+		t.Fatalf("custom header not sent: %q", authHeader)
+	}
+}
+
+func TestSendWebhookWithoutHeader(t *testing.T) {
+	var hadAuth bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, hadAuth = r.Header["Authorization"]
+	}))
+	defer srv.Close()
+
+	cfg := Config{Channel: ChannelWebhook, WebhookURL: srv.URL}
+	if err := Send(context.Background(), srv.Client(), cfg, Message{Title: "x"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if hadAuth {
+		t.Fatal("no header configured, yet one was sent")
+	}
+}
+
+func TestParseHeader(t *testing.T) {
+	cases := []struct {
+		in        string
+		name, val string
+	}{
+		{"Authorization: Bearer x", "Authorization", "Bearer x"},
+		{"  X-Token :  abc  ", "X-Token", "abc"},
+		{"no-colon", "", ""},
+		{"", "", ""},
+		{"X-Empty:", "X-Empty", ""},
+	}
+	for _, c := range cases {
+		if n, v := ParseHeader(c.in); n != c.name || v != c.val {
+			t.Errorf("ParseHeader(%q) = (%q, %q), want (%q, %q)", c.in, n, v, c.name, c.val)
+		}
 	}
 }
 

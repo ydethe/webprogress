@@ -103,6 +103,17 @@ func TestDefaultNotifyFromEnv(t *testing.T) {
 	}
 }
 
+func TestDefaultNotifyParsesWebhookHeader(t *testing.T) {
+	t.Setenv("WEBPROGRESS_NOTIFY_CHANNEL", "webhook")
+	t.Setenv("WEBPROGRESS_NOTIFY_WEBHOOK_URL", "https://example.com/hook")
+	t.Setenv("WEBPROGRESS_NOTIFY_WEBHOOK_HEADER", "Authorization: Bearer xyz")
+
+	n := Load().DefaultNotify()
+	if n.WebhookHeaderName != "Authorization" || n.WebhookHeaderValue != "Bearer xyz" {
+		t.Fatalf("header = (%q, %q)", n.WebhookHeaderName, n.WebhookHeaderValue)
+	}
+}
+
 func TestEnvIntFallsBackOnGarbage(t *testing.T) {
 	t.Setenv("WEBPROGRESS_NOTIFY_STALL_SECONDS", "not-a-number")
 	if cfg := Load(); cfg.NotifyStallSeconds != 0 {
