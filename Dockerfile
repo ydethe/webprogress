@@ -10,8 +10,13 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+# Version stamped into the binary at build time (defaults to "dev" for local builds).
+ARG VERSION=dev
 # Pure-Go build (modernc SQLite) → a static binary, so the final image needs no libc.
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/webprogress ./cmd/webprogress
+# -X overrides internal/server.Version so GET /version and the startup log report the real build.
+RUN CGO_ENABLED=0 go build \
+    -ldflags="-s -w -X github.com/ydethe/webprogress/internal/server.Version=${VERSION}" \
+    -o /out/webprogress ./cmd/webprogress
 
 # --- wget stage ---
 # busybox is statically linked, so its wget applet drops cleanly into the

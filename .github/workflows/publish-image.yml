@@ -46,5 +46,8 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
+          # Stamp the semver version (from the git tag) into the binary via the linker.
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

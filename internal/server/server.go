@@ -290,6 +290,7 @@ func Run() error {
 	}
 
 	addr := ":" + Port
+	log.Printf("webprogress server version %s (protocol v%d)", Version, models.ProtocolVersion)
 	log.Printf("webprogress server listening on %s", addr)
 	return http.ListenAndServe(addr, srv.Handler())
 }
