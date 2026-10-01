@@ -50,6 +50,7 @@ categories — **display** data (shown to the user), **routing/metadata**, and t
 | --- | --- |
 | `user_hostname` | Host name of the machine running the tracked program. Also used to identify a task (see §6.3). |
 | `user_login` | Account name of the user running the tracked program on that machine. |
+| `script` | Name of the script (or program) the task belongs to. Tasks sharing a script are grouped together on the dashboard, and the script is part of a task's identity (see §6.3). May be empty, in which case tasks fall into a shared "unscripted" group. |
 | `progress` | Number of completed units of work so far. |
 | `total` | Expected total number of units of work. |
 | `description` | Short label for the task. Also used to identify a task (see §6.3). |
@@ -88,6 +89,11 @@ Because `remaining_time` divides by `rate`, it is only meaningful once a non-zer
 
 The reporter is a drop-in replacement for an ordinary progress-bar facility. It behaves
 identically for the local display and adds the reporting side effect.
+
+Optionally, **before it begins reporting**, the reporter may perform the version handshake (§6.6):
+it reads the server's advertised protocol version and adapts the update message accordingly. This
+step is advisory and best-effort — skipping it, or failing to reach the server, never prevents the
+reporter from running.
 
 On **each display tick**, the reporter must:
 
@@ -153,9 +159,13 @@ any resulting update is simply rejected or undeliverable.
 ### 6.3 Dashboard
 
 - The dashboard displays **one live progress indicator per task**.
-- A **task** is identified by the pair *(origin host, description)*. Two updates sharing that pair
-  update the same indicator; a new pair creates a new indicator with a label identifying the task
-  and its origin host.
+- A **task** is identified by the triple *(script, origin host, description)*. Two updates sharing
+  that triple update the same indicator; a new triple creates a new indicator with a label
+  identifying the task.
+- Tasks are shown in a **three-level grouping**: by **script** at the top, then by **deployable**
+  (the origin host and the login running it), then the individual **tasks** as subitems. A single
+  script running on several hosts therefore shows one group per host underneath it, each with its
+  own tasks. Tasks whose `script` is empty are grouped together under a shared "unscripted" group.
 - Each indicator's fill is the fraction `progress / total` (shown as empty when `total` is zero).
 - A user sees **only their own tasks**: updates routed to other users never appear.
 
@@ -174,6 +184,20 @@ Within the web UI, a signed-in user can:
 
 - The server exposes an **unauthenticated health endpoint** that reports a basic "ok" status, for
   use by external monitors.
+
+### 6.6 Version advertisement (handshake)
+
+- The server exposes an **unauthenticated version endpoint** that advertises its identity, build
+  version, and the **protocol version** of the wire contract it speaks.
+- A client may perform this **handshake first**, before it starts reporting, to discover the
+  protocol version and **adapt the update message it sends** to what the server supports — for
+  example, only populating fields that the advertised protocol understands.
+- The handshake is advisory: because reporting is best-effort (§4), a client that skips the
+  handshake still works against a compatible server, and a client that queries it never blocks the
+  tracked task on the result.
+- The **protocol version** is incremented whenever the shared contract (§3) changes in a way that
+  clients must adapt to. The addition of the `script` field is covered by the current protocol
+  version.
 
 ---
 
@@ -202,6 +226,7 @@ Within the web UI, a signed-in user can:
 | --- | --- | --- | --- |
 | `/handler` | POST | Token (in body) | Ingest one update; **unauthorized** if the token is unknown/revoked/empty, otherwise routed to the owning user. |
 | `/health` | GET | None | Report basic liveness status. |
+| `/version` | GET | None | Advertise the server's name, build version, and wire **protocol version** for the client handshake (§6.6). |
 | `/login` | GET | None | Begin sign-in by delegating to the identity provider. |
 | `/auth` | GET | None | Identity-provider callback; establishes the session and returns to the dashboard. |
 | `/logout` | GET | None | Clear the local session and return to login. |

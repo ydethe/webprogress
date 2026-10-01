@@ -26,6 +26,11 @@ import (
 // Port is the fixed port the server listens on.
 const Port = "8775"
 
+// Version is the server build version advertised from GET /version. It defaults
+// to "dev" and is meant to be overridden at build time with the linker, e.g.
+// `go build -ldflags "-X github.com/ydethe/webprogress/internal/server.Version=1.2.3"`.
+var Version = "dev"
+
 //go:embed web/templates/*.html
 var templatesFS embed.FS
 
@@ -64,6 +69,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /version", s.handleVersion)
 	mux.HandleFunc("POST /handler", s.handleIngest)
 
 	mux.HandleFunc("GET /login", s.auth.Login)
@@ -83,6 +89,18 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleVersion advertises the server's identity, build version, and wire
+// protocol version. A client performs this handshake before it starts reporting
+// so it can adapt the update message it sends to the protocol the server speaks.
+// It is unauthenticated, like /health, so any client can probe it first.
+func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, models.ServerInfo{
+		Name:     "webprogress",
+		Version:  Version,
+		Protocol: models.ProtocolVersion,
+	})
 }
 
 // handleIngest authenticates an update by its token, stamps the sender address,
@@ -114,6 +132,7 @@ type wsMessage struct {
 	Label       string  `json:"label"`
 	Value       float64 `json:"value"`
 	Colour      string  `json:"colour"`
+	Script      string  `json:"script"`
 	Description string  `json:"description"`
 	Host        string  `json:"host"`
 	Login       string  `json:"login"`
@@ -164,6 +183,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			Label:       dashboardLabel(p),
 			Value:       p.Fraction(),
 			Colour:      p.Colour,
+			Script:      p.ScriptName(),
 			Description: p.Description,
 			Host:        p.UserHostname,
 			Login:       p.UserLogin,
@@ -274,12 +294,15 @@ func Run() error {
 	return http.ListenAndServe(addr, srv.Handler())
 }
 
+// dashboardLabel is the per-task subitem label. The dashboard groups tasks under
+// their script and deployable (host), so the host no longer needs to appear in
+// the label itself — the description alone identifies the task within its group.
 func dashboardLabel(p models.ClientPayload) string {
 	desc := p.Description
 	if desc == "" {
 		desc = "task"
 	}
-	return desc + " @ " + p.UserHostname
+	return desc
 }
 
 // clientHost returns the source host of the request (direct TCP peer), matching

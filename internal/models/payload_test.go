@@ -12,6 +12,7 @@ const pythonBody = `{
   "user_hostname": "host-a",
   "user_login": "yann",
   "user_src_address": "",
+  "script": "ingest.py",
   "progress": 25,
   "total": 100,
   "description": "download",
@@ -42,12 +43,19 @@ func TestUnmarshalWireContract(t *testing.T) {
 	if p.Colour != "#0000ff" || p.Key != "wbk_secret" {
 		t.Errorf("colour/key: %q %q", p.Colour, p.Key)
 	}
+	if p.Script != "ingest.py" {
+		t.Errorf("script: %q", p.Script)
+	}
 }
 
 func TestTaskKeyAndFraction(t *testing.T) {
-	p := ClientPayload{UserHostname: "h", Description: "d", Progress: 30, Total: 120}
-	if p.TaskKey() != "h:d" {
+	p := ClientPayload{Script: "s", UserHostname: "h", Description: "d", Progress: 30, Total: 120}
+	if p.TaskKey() != "s:h:d" {
 		t.Errorf("TaskKey = %q", p.TaskKey())
+	}
+	// An unset script falls back to a shared group but keeps a distinct key.
+	if (ClientPayload{UserHostname: "h", Description: "d"}).ScriptName() != "(unscripted)" {
+		t.Error("empty script should group under (unscripted)")
 	}
 	if p.Fraction() != 0.25 {
 		t.Errorf("Fraction = %v", p.Fraction())

@@ -61,6 +61,14 @@ these fields. Consequently, **any change to a field changes both sides at once**
 removing, or renaming a field is a contract change, not a local edit. This is the primary
 compatibility boundary of the system.
 
+To let the two sides evolve without breaking, the contract carries a **protocol version**, and the
+server **advertises it up front** through a version-handshake endpoint (specification §6.6). Before
+it reports, a client may read the advertised version and **adapt the message it sends** to the
+protocol the server speaks, rather than assuming a fixed shape. The handshake is best-effort and
+advisory: it is the negotiation seam that keeps the single shared contract forward- and
+backward-compatible as fields (such as `script`) are added. The protocol version is bumped whenever
+a contract change requires clients to adapt.
+
 ---
 
 ## 3. End-to-end data flow
@@ -88,9 +96,14 @@ browser as follows:
                                            9. filter: keep only
                                               updates for this viewer
                                           10. upsert one indicator per
-                                              (host, description) and
-                                              set its fill = progress/total
+                                              (script, host, description),
+                                              grouped script ▸ deployable ▸
+                                              task, fill = progress/total
 ```
+
+Optionally, before step 1, the reporter performs the **version handshake** (§2): it reads the
+server's advertised protocol version and adapts the message it will send. This is a one-off,
+best-effort step and is independent of the per-tick flow below.
 
 Steps 1–3 happen in the reporter; steps 4–7 in the Ingest & Routing Service; steps 8–10 in the
 Web Dashboard & Session Layer. The send in step 3 uses a short timeout and tolerates failure, so a
@@ -229,7 +242,9 @@ Two seams account for most changes:
 
 - **The shared update contract.** Anything affecting what data a task reports — new display fields,
   changed semantics — is a contract change touching both the reporter (which fills the field) and
-  the dashboard (which renders it). These move together.
+  the dashboard (which renders it). These move together. When such a change requires clients to
+  adapt, **bump the protocol version** (§2) so the version handshake advertises it and clients can
+  tailor the message they send.
 - **The event bus.** Anything affecting how updates are delivered live — additional rendering,
   alternative views, multi-instance delivery — attaches at the publish/subscribe step.
 

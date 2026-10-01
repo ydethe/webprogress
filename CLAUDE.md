@@ -20,10 +20,14 @@ Go module `github.com/ydethe/webprogress`. The entrypoint is `cmd/webprogress/ma
 under `internal/`, split into packages connected by the shared payload model:
 
 - **`internal/models`** — `ClientPayload` is the wire contract shared with the Python client. The JSON
-  field names (`user_hostname`, `progress`, `total`, `colour`, `key`, …) must match the client exactly;
-  changing one is a contract change. Numeric fields are `float64`. `key` authenticates/routes the sender
-  and is not displayed. `TaskKey` (host+description), `Fraction`, `RemainingTime`, and `ETA` are derived
-  helpers, never serialized.
+  field names (`user_hostname`, `script`, `progress`, `total`, `colour`, `key`, …) must match the client
+  exactly; changing one is a contract change. Numeric fields are `float64`. `key` authenticates/routes the
+  sender and is not displayed. `script` groups tasks on the dashboard and is part of a task's identity.
+  `TaskKey` (script+host+description), `ScriptName` (script with an "(unscripted)" fallback), `Fraction`,
+  `RemainingTime`, and `ETA` are derived helpers, never serialized. `ProtocolVersion` is the wire-protocol
+  version and `ServerInfo` is the handshake response the server advertises from `GET /version` so clients
+  can adapt the protocol before reporting; bump `ProtocolVersion` on any contract change clients must adapt
+  to.
 - **`internal/config`** — `Settings` loaded from `WEBPROGRESS_*` env vars (and an optional `.env` via
   godotenv). `RequireOIDC()` fails fast if the OIDC settings are missing; `RedirectURI()` derives the
   `/auth` callback from `BaseURL`; `LogConfig()` logs settings with secrets masked.
@@ -39,15 +43,19 @@ under `internal/`, split into packages connected by the shared payload model:
 - **`internal/auth`** — OIDC login (`coreos/go-oidc` + `golang.org/x/oauth2`) and the session cookie
   (`gorilla/sessions`, signed with `SESSION_SECRET`). `Login`/`Callback`/`Logout` run the OIDC round-trip
   and establish the session; `Middleware` redirects unauthenticated page requests to `/login`, while the
-  `unrestricted` routes (`/login`, `/auth`, `/logout`, `/handler`, `/health`) and `/static/` bypass it.
+  `unrestricted` routes (`/login`, `/auth`, `/logout`, `/handler`, `/health`, `/version`) and `/static/`
+  bypass it.
 - **`internal/server`** — HTTP routing and handlers. `POST /handler` resolves `payload.Key` to a user via
   `storage.ResolveToken` (**401** if unknown/revoked/empty), stamps `UserSrcAddress` from the request
-  host, and publishes a `RoutedPayload`. `GET /` renders the dashboard; `GET /ws` upgrades to a WebSocket
-  (`gorilla/websocket`), subscribes to the hub, and forwards only updates where `UserSub` matches the
-  viewer (per-user isolation at render). `POST /tokens/create` and `/tokens/revoke` manage tokens; the new
-  token's plaintext is shown once via a session flash. HTML template and JS live under
-  `internal/server/web/` and are embedded with `go:embed`. `Run()` loads config, validates OIDC,
-  initialises the DB, builds the OIDC provider, and serves on port **8775**.
+  host, and publishes a `RoutedPayload`. `GET /version` advertises `models.ServerInfo` (name, the
+  build-time `Version` var, and `models.ProtocolVersion`) for the client handshake; it is unauthenticated
+  like `/health`. `GET /` renders the dashboard; `GET /ws` upgrades to a WebSocket (`gorilla/websocket`),
+  subscribes to the hub, and forwards only updates where `UserSub` matches the viewer (per-user isolation
+  at render). The WebSocket frame carries `script`, and the dashboard groups tasks three levels deep —
+  **script ▸ deployable (host/login) ▸ task** — in `web/static/app.js`. `POST /tokens/create` and
+  `/tokens/revoke` manage tokens; the new token's plaintext is shown once via a session flash. HTML
+  template and JS live under `internal/server/web/` and are embedded with `go:embed`. `Run()` loads config,
+  validates OIDC, initialises the DB, builds the OIDC provider, and serves on port **8775**.
 
 Authentication (token → user) happens in `POST /handler` via `storage.ResolveToken`; per-user routing
 happens again in the WebSocket loop via the `UserSub` filter — the two isolation checkpoints described in

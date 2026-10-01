@@ -6,6 +6,23 @@ package models
 
 import "time"
 
+// ProtocolVersion is the version of the wire protocol this server speaks. The
+// server advertises it (together with its build version) from GET /version so a
+// client can discover it before reporting and adapt the update message it sends
+// — for example, only populating fields the server's protocol understands. It is
+// bumped whenever the shared contract changes in a way clients must adapt to.
+const ProtocolVersion = 1
+
+// ServerInfo is the handshake response returned by GET /version. A client reads
+// it first, before it starts reporting, so it can tailor the protocol it uses to
+// what this server supports. Name and Version identify the build; Protocol is the
+// wire-contract version (see ProtocolVersion).
+type ServerInfo struct {
+	Name     string `json:"name"`
+	Version  string `json:"version"`
+	Protocol int    `json:"protocol"`
+}
+
 // ClientPayload is one progress update as sent in the body of POST /handler.
 //
 // The client always sends all fields. Numeric values decode to float64 so that
@@ -16,6 +33,7 @@ type ClientPayload struct {
 	UserHostname   string  `json:"user_hostname"`
 	UserLogin      string  `json:"user_login"`
 	UserSrcAddress string  `json:"user_src_address"`
+	Script         string  `json:"script"`
 	Progress       float64 `json:"progress"`
 	Total          float64 `json:"total"`
 	Description    string  `json:"description"`
@@ -29,10 +47,22 @@ type ClientPayload struct {
 	Key            string  `json:"key"`
 }
 
-// TaskKey identifies a task on the dashboard: the pair (origin host, description).
-// Two updates sharing this key drive the same progress indicator.
+// TaskKey identifies a task on the dashboard: the triple (script, origin host,
+// description). Two updates sharing this key drive the same progress indicator.
+// The script is part of the identity so two scripts reporting the same
+// description on the same host stay distinct tasks.
 func (p ClientPayload) TaskKey() string {
-	return p.UserHostname + ":" + p.Description
+	return p.Script + ":" + p.UserHostname + ":" + p.Description
+}
+
+// ScriptName is the group a task belongs to on the dashboard. Tasks reported
+// under the same script are shown together; an unset script falls back to a
+// shared "(unscripted)" group. Derived, never carried on the wire.
+func (p ClientPayload) ScriptName() string {
+	if p.Script == "" {
+		return "(unscripted)"
+	}
+	return p.Script
 }
 
 // Fraction is the fill of the progress indicator in [0, 1]. It is 0 when total

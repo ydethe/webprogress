@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ydethe/webprogress/internal/bus"
+	"github.com/ydethe/webprogress/internal/models"
 	"github.com/ydethe/webprogress/internal/storage"
 )
 
@@ -81,5 +83,28 @@ func TestHealth(t *testing.T) {
 	s.handleHealth(rec, req)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"ok"`) {
 		t.Fatalf("health: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestVersionHandshake(t *testing.T) {
+	s := &Server{}
+	req := httptest.NewRequest("GET", "/version", nil)
+	rec := httptest.NewRecorder()
+	s.handleVersion(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("version: status %d", rec.Code)
+	}
+	var info models.ServerInfo
+	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+		t.Fatalf("decode: %v (%s)", err, rec.Body.String())
+	}
+	if info.Name != "webprogress" {
+		t.Errorf("name = %q", info.Name)
+	}
+	if info.Protocol != models.ProtocolVersion {
+		t.Errorf("protocol = %d, want %d", info.Protocol, models.ProtocolVersion)
+	}
+	if info.Version == "" {
+		t.Error("version must be advertised")
 	}
 }

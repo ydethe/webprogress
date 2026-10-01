@@ -6,16 +6,43 @@ the usual terminal progress bar *and* streams each update to a running
 webprogress server, which shows it live in your browser.
 
 ```python
-from webprogress import tqdm
+from webprogress_python import Tracker
+from webprogress_python.config import settings
 
-for a in tqdm(range(10), key="wbk_xxxxxxxxxxx", endpoint="http://localhost:8775"):
-    ...
+# A Tracker groups every bar it opens under one script name on the dashboard.
+with Tracker(script="basic.py", endpoint=settings) as t:
+    for a in t.tqdm(range(10), desc="foo"):
+        ...
+    for a in t.tqdm(range(10), desc="bar"):
+        ...
 ```
 
 `key` and `endpoint` may also be provided via the `WEBPROGRESS_KEY` and
-`WEBPROGRESS_ENDPOINT` environment variables. If the server is down, slow, or
+`WEBPROGRESS_HOST` environment variables. If the server is down, slow, or
 rejects the request, the tracked loop is never blocked or broken — the update is
 simply dropped.
+
+Each update carries a **`script`** field so the dashboard can group related
+tasks. The dashboard nests them three levels deep — **script ▸ deployable
+(the host/user running it) ▸ task** — so one script running on several machines
+shows one group per machine, each with its own bars. Tasks reported without a
+script fall into a shared "unscripted" group.
+
+### Version handshake
+
+The server advertises its identity and the wire **protocol version** from an
+unauthenticated endpoint, so a client can discover it *before* reporting and
+adapt the protocol it speaks:
+
+```bash
+curl http://localhost:8775/version
+# {"name":"webprogress","version":"dev","protocol":1}
+```
+
+The handshake is advisory — a client that skips it still works against a
+compatible server. `version` is the server build (overridable at build time, see
+below); `protocol` is bumped whenever the shared wire contract changes in a way
+clients must adapt to (for example, the addition of the `script` field).
 
 ## How it works
 
@@ -49,6 +76,14 @@ Then build and start it:
 ```bash
 go build -o webprogress ./cmd/webprogress
 ./webprogress
+```
+
+The version advertised at `/version` defaults to `dev`; stamp a real build
+version with the linker:
+
+```bash
+go build -ldflags "-X github.com/ydethe/webprogress/internal/server.Version=$(git describe --tags)" \
+  -o webprogress ./cmd/webprogress
 ```
 
 The app serves on port **8775**. Log in, generate a token, and use it as your

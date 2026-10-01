@@ -31,6 +31,7 @@ var unrestricted = map[string]bool{
 	"/logout":  true,
 	"/handler": true,
 	"/health":  true,
+	"/version": true,
 }
 
 // User is the identity stored in the session after a successful sign-in.
