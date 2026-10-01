@@ -202,7 +202,21 @@
         </span>
       </summary>
       <div class="mt-4">
-        <div id="tasks" class="space-y-4"></div>
+        <div class="overflow-hidden rounded-xl border border-slate-800">
+          <table class="w-full text-left text-sm">
+            <thead class="bg-slate-900/50 text-xs uppercase tracking-wide text-slate-500">
+              <tr>
+                <th class="py-2.5 pl-4 pr-2 font-medium">Started</th>
+                <th class="py-2.5 px-2 font-medium">Host</th>
+                <th class="py-2.5 px-2 font-medium">Script</th>
+                <th class="py-2.5 px-2 font-medium">Task</th>
+                <th class="py-2.5 px-2 font-medium">Tags</th>
+                <th class="py-2.5 pl-2 pr-4 font-medium">Status</th>
+              </tr>
+            </thead>
+            <tbody id="tasks" class="divide-y divide-slate-800/80"></tbody>
+          </table>
+        </div>
         <p id="empty" class="rounded-xl border border-dashed border-slate-800 px-6 py-10 text-center text-sm text-slate-500">
           No matching tasks. Run a tracked task with one of your tokens, or widen the status filter above.
         </p>
