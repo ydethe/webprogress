@@ -12,9 +12,22 @@ import (
 )
 
 // RoutedPayload is an update bound to its owning user at ingest time.
+// InstanceID identifies the particular run of the task — the client-assigned uuid
+// (see models.ClientPayload.InstanceKey) — so a restart, arriving under a new id,
+// gets its own dashboard card instead of reviving the previous one that shared its
+// (script, host, description) key.
+//
+// StallSeconds and DeadSeconds are the silence thresholds the server derives from
+// the task's observed update cadence (see server.cadenceTracker): once the task
+// has been silent for StallSeconds the dashboard shows it as stalled, and past
+// DeadSeconds as dead. Zero means "not yet known" (cadence unobserved), in which
+// case the task is only ever running or finished.
 type RoutedPayload struct {
-	UserSub string
-	Payload models.ClientPayload
+	UserSub      string
+	InstanceID   string
+	StallSeconds float64
+	DeadSeconds  float64
+	Payload      models.ClientPayload
 }
 
 // subBuffer is how many pending updates a subscriber may lag by before the hub

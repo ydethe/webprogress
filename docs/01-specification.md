@@ -61,6 +61,12 @@ categories — **display** data (shown to the user), **routing/metadata**, and t
 | `unit_divisor` | Divisor used when scaling units. |
 | `initial` | Starting count for a task that resumed from a non-zero point. |
 | `colour` | Preferred colour for the progress indicator. |
+| `uuid` | Identity of this particular **run** of the task, assigned by the reporter (one value per run — see §6.3). The server draws one dashboard card per uuid, so a restarted task, sending a new uuid, opens a new card instead of reviving the previous run's. Added in protocol version 3; a pre-v3 reporter omits the field and the server falls back to the (`script`, `user_hostname`, `description`) triple, which cannot tell successive runs apart. |
+| `tags` | Optional list of free-form labels attached to the task (e.g. `["gpu", "nightly"]`). Shown as chips on the dashboard and available as a filter dimension; they are **not** part of a task's identity (see §6.3). Added in protocol version 2; a pre-v2 reporter omits the field. |
+
+The reporter advertises **nothing about liveness**: whether a task has stalled or
+died is judged entirely by the server from how often the task reports (see §6.3),
+so there is no heartbeat field to send.
 
 ### 3.2 Routing / metadata field
 
@@ -82,6 +88,39 @@ Two values are **computed** from the fields above and are never carried on the w
 - `eta` — absolute estimated completion time, computed as the current time plus `remaining_time`.
 
 Because `remaining_time` divides by `rate`, it is only meaningful once a non-zero rate exists.
+
+### 3.5 Full example
+
+A complete update message, as sent by the reporter in the body of a single ingest
+request. All fields are present; `user_src_address` is empty because the server
+stamps it on receipt, and `key` carries the credential token.
+
+```json
+{
+  "user_hostname": "gpu-node-03",
+  "user_login": "ydethe",
+  "user_src_address": "",
+  "script": "train.py",
+  "progress": 1280,
+  "total": 5000,
+  "description": "epoch 3/12",
+  "elapsed": 42.5,
+  "unit": "batch",
+  "unit_scale": true,
+  "rate": 30.1,
+  "unit_divisor": 1000,
+  "initial": 0,
+  "colour": "#3b82f6",
+  "key": "wp_8f3a1c9e4b7d2056",
+  "uuid": "f0e1d2c3-b4a5-6789-0123-456789abcdef",
+  "tags": ["gpu", "nightly"]
+}
+```
+
+From this message the server derives `remaining_time = (5000 − 1280) / 30.1 ≈
+123.6` seconds and an `eta` of the receipt time plus that interval; neither is
+carried on the wire (see §3.4). A pre-v2 reporter sends the same message without
+the `tags` field.
 
 ---
 
@@ -162,11 +201,46 @@ any resulting update is simply rejected or undeliverable.
 - A **task** is identified by the triple *(script, origin host, description)*. Two updates sharing
   that triple update the same indicator; a new triple creates a new indicator with a label
   identifying the task.
+- A task's indicator tracks a single **run**, identified by the reporter-assigned `uuid` (§3.1).
+  Two updates sharing a uuid drive the same indicator. When a task **restarts**, the reporter mints a
+  new uuid for the new run, so the server gives it a **fresh indicator** rather than reviving the
+  previous one (which may have aged to *stalled* or *dead*). The run identity is kept out of the way:
+  the triple above is unchanged, so the new run is grouped and labelled exactly like the old one. A
+  pre-v3 reporter that sends no uuid falls back to the triple as the run key, which cannot distinguish
+  successive runs — restarting such a task reuses the old indicator.
 - Tasks are shown in a **three-level grouping**: by **script** at the top, then by **deployable**
   (the origin host and the login running it), then the individual **tasks** as subitems. A single
   script running on several hosts therefore shows one group per host underneath it, each with its
   own tasks. Tasks whose `script` is empty are grouped together under a shared "unscripted" group.
 - Each indicator's fill is the fraction `progress / total` (shown as empty when `total` is zero).
+- Every task lives in a **single "Tasks" section** — running and finished tasks are shown together,
+  distinguished by their status badge rather than by separate sections.
+- Each task carries a **status**, one of:
+  - **running** — in progress and reporting normally;
+  - **finished** — reached 100% (`progress / total` ≥ 1), stays finished regardless of later
+    silence;
+  - **stalled** — has gone silent for more than **twice** its usual interval between updates but may
+    still recover;
+  - **dead** — has gone silent for more than **ten times** its usual interval between updates, so the
+    task is presumed gone; it is dropped from the default view.
+
+  Status is **derived**, never carried on the wire: it follows from the task's fraction and how long
+  it has been silent relative to its **update cadence** — the interval at which it normally reports,
+  which the server measures (an exponentially-weighted average of the gaps between received updates,
+  and so proportional to the task's rate). The reporter advertises nothing about liveness. Until the
+  server has seen a task report twice it does not yet know the cadence, and falls back to a
+  configurable default interval (`WEBPROGRESS_DEFAULT_UPDATE_INTERVAL_SECONDS`, 30s by default) so
+  that even a report-once-and-die task is eventually aged out; setting that default to `0` leaves such
+  a task *running* until its cadence is known. A very fast cadence is floored so ordinary network
+  jitter does not flap a task between *running* and *stalled*.
+- A task's `tags` are shown as **chips** on its indicator. Clicking a chip adds that tag to the
+  tag filter.
+- The dashboard offers a **filter** over four text dimensions — **host**, **script**, **task**
+  (description), and **tags** — plus a **status** filter, applied together (a task must match every
+  set dimension). Host, script, and task match as case-insensitive substrings; the tag filter
+  requires every listed tag to be present on the task; the status filter keeps only tasks whose
+  status is selected. By **default only *running* tasks are shown**; the other statuses are revealed
+  by selecting them. Groups with no matching task are hidden while a filter is active.
 - A user sees **only their own tasks**: updates routed to other users never appear.
 
 ### 6.4 Token management
@@ -196,8 +270,10 @@ Within the web UI, a signed-in user can:
   handshake still works against a compatible server, and a client that queries it never blocks the
   tracked task on the result.
 - The **protocol version** is incremented whenever the shared contract (§3) changes in a way that
-  clients must adapt to. The addition of the `script` field is covered by the current protocol
-  version.
+  clients must adapt to. The current protocol version is **3**, which added the reporter-assigned
+  per-run `uuid`; version 2 added the optional `tags` field, and version 1 covered the addition of the
+  `script` field. (Liveness is judged by the server from the update cadence, so it needs no wire field
+  and no version bump — see §6.3.)
 
 ---
 

@@ -5,7 +5,9 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"html/template"
 	"io/fs"
@@ -42,11 +44,14 @@ var staticFS embed.FS
 
 // Server holds the dependencies shared across handlers.
 type Server struct {
-	cfg   *config.Settings
-	store *storage.Store
-	hub   *bus.Hub
-	auth  *auth.Auth
-	tmpl  *template.Template
+	cfg      *config.Settings
+	store    *storage.Store
+	hub      *bus.Hub
+	auth     *auth.Auth
+	tmpl     *template.Template
+	assetVer string // content hash of app.js, used to cache-bust the <script> URL
+
+	cadence *cadenceTracker // per-run update cadence, for the silence thresholds
 
 	upgrader websocket.Upgrader
 }
@@ -63,8 +68,23 @@ func New(cfg *config.Settings, store *storage.Store, hub *bus.Hub, a *auth.Auth)
 		hub:      hub,
 		auth:     a,
 		tmpl:     tmpl,
+		assetVer: assetHash("web/static/app.js"),
+		cadence:  newCadenceTracker(cfg.DefaultUpdateIntervalSeconds),
 		upgrader: websocket.Upgrader{},
 	}, nil
+}
+
+// assetHash returns a short content hash of an embedded static asset, used to
+// cache-bust its URL. When the file changes, the hash changes, so the browser
+// fetches the new version instead of serving a stale cached copy. A read error
+// falls back to the build Version so the URL still changes between builds.
+func assetHash(name string) string {
+	b, err := staticFS.ReadFile(name)
+	if err != nil {
+		return Version
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])[:12]
 }
 
 // Handler returns the fully wired HTTP handler (routes + auth guard).
@@ -140,7 +160,24 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		userSub = sub
 	}
 	payload.UserSrcAddress = clientHost(r)
-	s.hub.Publish(bus.RoutedPayload{UserSub: userSub, Payload: payload})
+	// The run's identity is the client's own uuid (falling back to the task key
+	// for a pre-v3 client), so a restart arrives under a new id and opens a new
+	// card instead of reviving the previous, possibly dead, one. From how often the
+	// run reports, the server derives the silence thresholds that let the dashboard
+	// age a task that stops reporting into stalled then dead — the client
+	// advertises nothing about liveness.
+	instanceID := payload.InstanceKey()
+	var stall, dead float64
+	if s.cadence != nil {
+		stall, dead = s.cadence.observe(userSub, instanceID)
+	}
+	s.hub.Publish(bus.RoutedPayload{
+		UserSub:      userSub,
+		InstanceID:   instanceID,
+		StallSeconds: stall,
+		DeadSeconds:  dead,
+		Payload:      payload,
+	})
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -150,22 +187,34 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 // browser and independent of the Python wire contract (models.ClientPayload), so
 // it may grow freely without touching client compatibility.
 type wsMessage struct {
-	Key         string  `json:"key"`
-	Label       string  `json:"label"`
-	Value       float64 `json:"value"`
-	Colour      string  `json:"colour"`
-	Script      string  `json:"script"`
-	Description string  `json:"description"`
-	Host        string  `json:"host"`
-	Login       string  `json:"login"`
-	SrcAddress  string  `json:"src_address"`
-	Progress    float64 `json:"progress"`
-	Total       float64 `json:"total"`
-	Elapsed     float64 `json:"elapsed"`
-	Rate        float64 `json:"rate"`
-	Unit        string  `json:"unit"`
-	Remaining   float64 `json:"remaining"`
-	ETA         string  `json:"eta"`
+	// Key is the dashboard's dedup key for the card: the run's instance id
+	// (see bus.RoutedPayload.InstanceID), not the task's (script, host,
+	// description) key — so a restarted task opens a new card rather than
+	// reviving the old one.
+	Key         string   `json:"key"`
+	Label       string   `json:"label"`
+	Value       float64  `json:"value"`
+	Colour      string   `json:"colour"`
+	Script      string   `json:"script"`
+	Description string   `json:"description"`
+	Host        string   `json:"host"`
+	Login       string   `json:"login"`
+	SrcAddress  string   `json:"src_address"`
+	Progress    float64  `json:"progress"`
+	Total       float64  `json:"total"`
+	Elapsed     float64  `json:"elapsed"`
+	Rate        float64  `json:"rate"`
+	Unit        string   `json:"unit"`
+	Remaining   float64  `json:"remaining"`
+	ETA         string   `json:"eta"`
+	Tags        []string `json:"tags"`
+	// Liveness thresholds in seconds, derived by the server from the task's
+	// observed update cadence. The browser compares them against the time since
+	// this frame arrived to show the task as stalled (past StallSeconds) or dead
+	// (past DeadSeconds). A zero threshold means "not yet known" (the task's
+	// cadence has not been observed), so the task stays running until it is.
+	StallSeconds float64 `json:"stall_seconds"`
+	DeadSeconds  float64 `json:"dead_seconds"`
 }
 
 // handleWS upgrades to a WebSocket, subscribes to the hub, and forwards only the
@@ -201,7 +250,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 		p := routed.Payload
 		msg := wsMessage{
-			Key:         p.TaskKey(),
+			Key:         routed.InstanceID,
 			Label:       dashboardLabel(p),
 			Value:       p.Fraction(),
 			Colour:      p.Colour,
@@ -217,6 +266,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			Unit:        p.Unit,
 			Remaining:   p.RemainingTime(),
 			ETA:         p.ETA().Format(time.RFC3339),
+			Tags:        p.Tags,
+
+			StallSeconds: routed.StallSeconds,
+			DeadSeconds:  routed.DeadSeconds,
 		}
 		if err := conn.WriteJSON(msg); err != nil {
 			return
@@ -226,13 +279,14 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 // dashboardData is the template model for the dashboard page.
 type dashboardData struct {
-	Name      string
-	Tokens    []storage.Token
-	NewToken  string
-	Version   string
-	Protocol  int
-	Notify    notifyView
-	NotifyMsg string // one-time flash shown after saving/testing settings
+	Name         string
+	Tokens       []storage.Token
+	NewToken     string
+	Version      string
+	Protocol     int
+	AssetVersion string // cache-busting token appended to the app.js URL
+	Notify       notifyView
+	NotifyMsg    string // one-time flash shown after saving/testing settings
 }
 
 // notifyView is the flattened notification config the Settings form renders and
@@ -276,13 +330,14 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	notifyCfg, persisted := s.effectiveNotify(r.Context(), user.Sub)
 	data := dashboardData{
-		Name:      user.Name,
-		Tokens:    tokens,
-		NewToken:  s.auth.PopFlash(w, r, "new_token"),
-		Version:   Version,
-		Protocol:  models.ProtocolVersion,
-		Notify:    toNotifyView(notifyCfg, persisted),
-		NotifyMsg: s.auth.PopFlash(w, r, "notify_msg"),
+		Name:         user.Name,
+		Tokens:       tokens,
+		NewToken:     s.auth.PopFlash(w, r, "new_token"),
+		Version:      Version,
+		Protocol:     models.ProtocolVersion,
+		AssetVersion: s.assetVer,
+		Notify:       toNotifyView(notifyCfg, persisted),
+		NotifyMsg:    s.auth.PopFlash(w, r, "notify_msg"),
 	}
 	if err := s.tmpl.ExecuteTemplate(w, "dashboard.html", data); err != nil {
 		log.Printf("render dashboard: %v", err)

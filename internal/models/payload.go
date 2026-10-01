@@ -11,7 +11,11 @@ import "time"
 // client can discover it before reporting and adapt the update message it sends
 // — for example, only populating fields the server's protocol understands. It is
 // bumped whenever the shared contract changes in a way clients must adapt to.
-const ProtocolVersion = 1
+//
+// v2 adds the optional `tags` field to ClientPayload.
+// v3 adds the client-assigned `uuid` field, one per task run, so the dashboard
+// tells successive runs of the same task apart instead of reviving the old card.
+const ProtocolVersion = 3
 
 // ServerInfo is the handshake response returned by GET /version. A client reads
 // it first, before it starts reporting, so it can tailor the protocol it uses to
@@ -45,6 +49,18 @@ type ClientPayload struct {
 	Initial        float64 `json:"initial"`
 	Colour         string  `json:"colour"`
 	Key            string  `json:"key"`
+	// UUID is the client-assigned identity of this task run. The client mints a
+	// fresh value for each run (each tqdm instance), so when a task is restarted
+	// the server sees a new uuid and opens a new dashboard card instead of
+	// reviving the previous run's — which may have aged to stalled or dead. Added
+	// in protocol v3; an older client omits the field and it decodes to "", in
+	// which case the server falls back to the TaskKey (see InstanceKey).
+	UUID string `json:"uuid"`
+	// Tags are optional free-form labels the client may attach to a task (e.g.
+	// "gpu", "nightly"). They are displayed as chips on the dashboard and can be
+	// filtered on; they are not part of the task identity. Added in protocol v2;
+	// an older client omits the field and it decodes to nil.
+	Tags []string `json:"tags"`
 }
 
 // TaskKey identifies a task on the dashboard: the triple (script, origin host,
@@ -53,6 +69,18 @@ type ClientPayload struct {
 // description on the same host stay distinct tasks.
 func (p ClientPayload) TaskKey() string {
 	return p.Script + ":" + p.UserHostname + ":" + p.Description
+}
+
+// InstanceKey identifies one run of a task — the unit the dashboard draws as a
+// single card. The client assigns a fresh UUID per run, so restarting a task
+// yields a new key and therefore a new card rather than reviving the old one. A
+// client too old to send a uuid falls back to the TaskKey, which cannot tell
+// successive runs apart (the pre-v3 behaviour).
+func (p ClientPayload) InstanceKey() string {
+	if p.UUID != "" {
+		return p.UUID
+	}
+	return p.TaskKey()
 }
 
 // ScriptName is the group a task belongs to on the dashboard. Tasks reported
@@ -88,4 +116,46 @@ func (p ClientPayload) RemainingTime() float64 {
 // never carried on the wire.
 func (p ClientPayload) ETA() time.Time {
 	return time.Now().UTC().Add(time.Duration(p.RemainingTime() * float64(time.Second)))
+}
+
+// Liveness multiples. A task's silence is judged against its own update cadence
+// (the interval at which it normally reports, which follows from its rate): once
+// it has been silent for more than StallMultiple cadences it is shown as stalled,
+// and past DeadMultiple it is shown as dead and dropped from the default view.
+// The cadence is observed by the server (see server.cadenceTracker), not
+// advertised by the client.
+const (
+	StallMultiple = 2
+	DeadMultiple  = 10
+)
+
+// TaskStatus is a task's lifecycle state as shown on the dashboard. It is
+// derived from the task's fraction and how long it has gone silent relative to
+// its update cadence; it is never carried on the wire.
+type TaskStatus string
+
+const (
+	StatusRunning  TaskStatus = "running"
+	StatusFinished TaskStatus = "finished"
+	StatusStalled  TaskStatus = "stalled"
+	StatusDead     TaskStatus = "dead"
+)
+
+// Status returns the task's lifecycle state given how long it has been silent
+// (idle = now − last update) and the stall/dead thresholds derived from its
+// update cadence. A finished task (fraction ≥ 1) stays finished regardless of
+// silence; zero thresholds mean liveness cannot be judged yet, so the task is
+// only ever running or finished. This mirrors the per-second sweep the dashboard
+// runs in the browser.
+func (p ClientPayload) Status(idle, stall, dead time.Duration) TaskStatus {
+	if p.Fraction() >= 1 {
+		return StatusFinished
+	}
+	if dead > 0 && idle >= dead {
+		return StatusDead
+	}
+	if stall > 0 && idle >= stall {
+		return StatusStalled
+	}
+	return StatusRunning
 }

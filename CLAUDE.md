@@ -23,8 +23,17 @@ under `internal/`, split into packages connected by the shared payload model:
   field names (`user_hostname`, `script`, `progress`, `total`, `colour`, `key`, …) must match the client
   exactly; changing one is a contract change. Numeric fields are `float64`. `key` authenticates/routes the
   sender and is not displayed. `script` groups tasks on the dashboard and is part of a task's identity.
-  `TaskKey` (script+host+description), `ScriptName` (script with an "(unscripted)" fallback), `Fraction`,
-  `RemainingTime`, and `ETA` are derived helpers, never serialized. `ProtocolVersion` is the wire-protocol
+  `TaskKey` (script+host+description) is the logical task key the dispatcher groups by. `uuid` is the
+  **client-assigned per-run identity** (one per tqdm run): `InstanceKey` returns it, falling back to
+  `TaskKey` for a pre-v3 client, and that key is the dashboard card's identity so a restart (new uuid)
+  opens a fresh card instead of reviving the old one.
+  `ScriptName` (script with an "(unscripted)" fallback), `Fraction`,
+  `RemainingTime`, and `ETA` are derived helpers, never serialized. Liveness carries no wire field:
+  the server judges it from the task's update cadence (see `cadenceTracker` below), deriving the
+  `stall`/`dead` silence thresholds; `Status(idle, stall, dead)` yields the task's `TaskStatus`
+  (`running`, `finished`, `stalled`, `dead`) the dashboard shows and filters on, with `StallMultiple`/
+  `DeadMultiple` (2 and 10) the cadence multiples. `ProtocolVersion` (currently 3; v3 added the
+  client-assigned `uuid`) is the wire-protocol
   version and `ServerInfo` is the handshake response the server advertises from `GET /version` so clients
   can adapt the protocol before reporting; bump `ProtocolVersion` on any contract change clients must adapt
   to.
@@ -32,7 +41,10 @@ under `internal/`, split into packages connected by the shared payload model:
   godotenv). `RequireOIDC()` fails fast if the OIDC settings are missing; `RedirectURI()` derives the
   `/auth` callback from `BaseURL`; `LogConfig()` logs settings with secrets masked. The `WEBPROGRESS_NOTIFY_*`
   vars feed `DefaultNotify()`, the server-wide fallback notification config (a persisted per-user config
-  always overrides it).
+  always overrides it). `DefaultUpdateIntervalSeconds` (`WEBPROGRESS_DEFAULT_UPDATE_INTERVAL_SECONDS`,
+  default 30) is the fallback update cadence the `cadenceTracker` assumes until it has observed a
+  task's own (i.e. for the first update), so even a report-once-and-die task is aged out; `0` disables
+  the fallback.
 - **`internal/notify`** — out-of-band task alerts, independent of the Python wire contract. `Config`
   describes one user's channel (`pushover`, `slack`, `webhook`, or empty/off) plus a `StallSeconds`
   timeout; `Send` delivers a `Message` over it. The `Dispatcher` subscribes to the `bus.Hub` and fires a
@@ -47,9 +59,13 @@ under `internal/`, split into packages connected by the shared payload model:
   user's persisted notification config. Methods: `Open`/`initDB`, `UpsertUser`, `CreateToken`,
   `ResolveToken`, `ListTokens`, `RevokeToken`, `GetNotifyConfig`, `SaveNotifyConfig`, `ClearNotifyConfig`.
 - **`internal/bus`** — the in-process pub/sub `Hub`. The ingest handler `Publish`es a `RoutedPayload`
-  (payload + `UserSub`); each open dashboard connection `Subscribe`s. This publish/subscribe step is the
-  core rendering mechanism. `Publish` is non-blocking (drops to a full subscriber) so a slow dashboard
-  never stalls ingest.
+  (payload + `UserSub` + `InstanceID` + `StallSeconds`/`DeadSeconds`); each open dashboard connection
+  `Subscribe`s. This publish/subscribe step is the core rendering mechanism. `Publish` is non-blocking
+  (drops to a full subscriber) so a slow dashboard never stalls ingest. `InstanceID` is the per-run
+  identity — the client's `uuid` (via `payload.InstanceKey()`) — used as the dashboard's card key, so a
+  restart of the same task (new uuid) opens a new card instead of reviving the old one;
+  `StallSeconds`/`DeadSeconds` are the silence thresholds the server's `cadenceTracker` derives from the
+  task's observed update cadence.
 - **`internal/auth`** — OIDC login (`coreos/go-oidc` + `golang.org/x/oauth2`) and the session cookie
   (`gorilla/sessions`, signed with `SESSION_SECRET`). `Login`/`Callback`/`Logout` run the OIDC round-trip
   and establish the session; `Middleware` redirects unauthenticated page requests to `/login`, while the
@@ -57,12 +73,20 @@ under `internal/`, split into packages connected by the shared payload model:
   bypass it.
 - **`internal/server`** — HTTP routing and handlers. `POST /handler` resolves `payload.Key` to a user via
   `storage.ResolveToken` (**401** if unknown/revoked/empty), stamps `UserSrcAddress` from the request
-  host, and publishes a `RoutedPayload`. `GET /version` advertises `models.ServerInfo` (name, the
+  host, and derives the run's `InstanceID` from the client's `uuid` (`payload.InstanceKey()`, falling
+  back to `TaskKey` for a pre-v3 client). It calls `cadenceTracker.observe` (see `cadence.go`), keyed by
+  that run id, for the `stall_seconds`/`dead_seconds` silence thresholds derived from the task's observed
+  update cadence (EWMA of the gaps between its updates, floored against jitter, falling back to the
+  configured default until the cadence is known); it then publishes a `RoutedPayload`. `GET /version`
+  advertises `models.ServerInfo` (name, the
   build-time `Version` var, and `models.ProtocolVersion`) for the client handshake; it is unauthenticated
   like `/health`. `GET /` renders the dashboard; `GET /ws` upgrades to a WebSocket (`gorilla/websocket`),
   subscribes to the hub, and forwards only updates where `UserSub` matches the viewer (per-user isolation
-  at render). The WebSocket frame carries `script`, and the dashboard groups tasks three levels deep —
-  **script ▸ deployable (host/login) ▸ task** — in `web/static/app.js`. `POST /tokens/create` and
+  at render). The WebSocket frame carries `script` plus the cadence-derived silence thresholds
+  (`stall_seconds`, `dead_seconds`), and the dashboard groups tasks three levels deep —
+  **script ▸ deployable (host/login) ▸ task** — in `web/static/app.js`. Running and finished tasks share one
+  "Tasks" section; each card shows a status badge and a one-second sweep ages silent tasks from running to
+  stalled to dead against those thresholds, with a status filter (running only by default) deciding what shows. `POST /tokens/create` and
   `/tokens/revoke` manage tokens; the new token's plaintext is shown once via a session flash.
   `POST /settings/notify`, `/settings/notify/reset`, and `/settings/notify/test` manage per-user
   notification settings from the dashboard's Settings menu; `effectiveNotify` resolves a user's config

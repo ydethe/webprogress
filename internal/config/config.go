@@ -25,6 +25,16 @@ type Settings struct {
 	SessionSecret         string
 	DBPath                string
 
+	// DefaultUpdateIntervalSeconds is the expected interval (seconds) between a
+	// task's updates that the server assumes until it has observed the task's own
+	// cadence — i.e. for the very first update, before two updates have been seen.
+	// From it the dashboard derives the silence thresholds (stall at twice the
+	// interval, dead at ten times) so even a task that reports once and dies is
+	// eventually aged out. Once the server has seen the task report twice it uses
+	// the observed cadence instead. Set to 0 to disable the fallback: a task is
+	// then only judged once its cadence is known.
+	DefaultUpdateIntervalSeconds float64
+
 	// Notify* provide the server-wide default notification channel. They are
 	// used only for a user who has not saved their own settings, which always
 	// take precedence (see storage and server.effectiveNotify).
@@ -53,6 +63,8 @@ func Load() *Settings {
 		BaseURL:               env("WEBPROGRESS_BASE_URL", "http://127.0.0.1:8775"),
 		SessionSecret:         env("WEBPROGRESS_SESSION_SECRET", "change-me"),
 		DBPath:                env("WEBPROGRESS_DB_PATH", "webprogress.db"),
+
+		DefaultUpdateIntervalSeconds: envFloat("WEBPROGRESS_DEFAULT_UPDATE_INTERVAL_SECONDS", 30),
 
 		NotifyChannel:         env("WEBPROGRESS_NOTIFY_CHANNEL", ""),
 		NotifyPushoverToken:   env("WEBPROGRESS_NOTIFY_PUSHOVER_TOKEN", ""),
@@ -119,6 +131,7 @@ func (s *Settings) LogConfig() {
 	log.Printf("  base_url = %s", s.BaseURL)
 	log.Printf("  session_secret = %s", mask(s.SessionSecret))
 	log.Printf("  db_path = %s", s.DBPath)
+	log.Printf("  default_update_interval_seconds = %g", s.DefaultUpdateIntervalSeconds)
 	log.Printf("  redirect_uri = %s", s.RedirectURI())
 	log.Printf("  notify_channel = %s", s.NotifyChannel)
 	log.Printf("  notify_pushover_token = %s", mask(s.NotifyPushoverToken))
@@ -146,6 +159,15 @@ func env(key, def string) string {
 func envInt(key string, def int) int {
 	if v, ok := os.LookupEnv(key); ok {
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+func envFloat(key string, def float64) float64 {
+	if v, ok := os.LookupEnv(key); ok {
+		if n, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
 			return n
 		}
 	}

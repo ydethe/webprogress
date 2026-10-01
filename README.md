@@ -36,13 +36,14 @@ adapt the protocol it speaks:
 
 ```bash
 curl http://localhost:8775/version
-# {"name":"webprogress","version":"dev","protocol":1}
+# {"name":"webprogress","version":"dev","protocol":3}
 ```
 
 The handshake is advisory — a client that skips it still works against a
 compatible server. `version` is the server build (overridable at build time, see
 below); `protocol` is bumped whenever the shared wire contract changes in a way
-clients must adapt to (for example, the addition of the `script` field).
+clients must adapt to (for example, the addition of the `script` field, or the
+per-run `uuid` a client sends so its restarts open fresh dashboard cards).
 
 ## How it works
 
@@ -70,6 +71,7 @@ variables (or a `.env` file):
 | `WEBPROGRESS_BASE_URL` | Public base URL, used to build the `/auth` redirect (default `http://127.0.0.1:8775`) |
 | `WEBPROGRESS_SESSION_SECRET` | Secret signing session cookies — set a strong value in production |
 | `WEBPROGRESS_DB_PATH` | SQLite database path (default `webprogress.db`) |
+| `WEBPROGRESS_DEFAULT_UPDATE_INTERVAL_SECONDS` | Expected seconds between a task's updates, assumed only until the server observes the task's own reporting cadence; from it a silent task is aged to stalled (after 2×) then dead (after 10×) (default `30`; `0` disables the fallback) |
 | `WEBPROGRESS_NOTIFY_CHANNEL` | Default notification channel: `pushover`, `slack`, `webhook`, or empty for off |
 | `WEBPROGRESS_NOTIFY_PUSHOVER_TOKEN` / `_USER` | Pushover application token and user/group key |
 | `WEBPROGRESS_NOTIFY_SLACK_WEBHOOK_URL` | Slack incoming-webhook URL |

@@ -24,8 +24,9 @@ func newIngestServer(t *testing.T) *Server {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
-	// handleIngest only needs the store and hub; auth/templates are unused here.
-	return &Server{store: store, hub: bus.New()}
+	// handleIngest only needs the store, hub, config, and cadence tracker;
+	// auth/templates are unused here. The tracker uses a 30s default cadence.
+	return &Server{store: store, hub: bus.New(), cfg: &config.Settings{}, cadence: newCadenceTracker(30)}
 }
 
 func TestIngestUnknownToken(t *testing.T) {
@@ -73,6 +74,105 @@ func TestIngestValidTokenPublishesAndStampsAddress(t *testing.T) {
 		}
 		if routed.Payload.Fraction() != 0.5 {
 			t.Errorf("fraction = %v", routed.Payload.Fraction())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no payload published")
+	}
+}
+
+func TestIngestStampsLivenessThresholds(t *testing.T) {
+	s := newIngestServer(t) // helper uses a 30s default cadence
+	ctx := context.Background()
+	plaintext, err := s.store.CreateToken(ctx, "user-1", "t")
+	if err != nil {
+		t.Fatalf("CreateToken: %v", err)
+	}
+
+	ch, cancel := s.hub.Subscribe()
+	defer cancel()
+
+	// The first update has no observed cadence yet, so the server stamps the
+	// thresholds derived from the default interval (stall 2×, dead 10×). The
+	// client advertises nothing about liveness.
+	body := `{"user_hostname":"h","description":"d","progress":1,"total":100,"key":"` + plaintext + `"}`
+	req := httptest.NewRequest("POST", "/handler", strings.NewReader(body))
+	req.RemoteAddr = "203.0.113.7:5555"
+	s.handleIngest(httptest.NewRecorder(), req)
+
+	select {
+	case routed := <-ch:
+		if routed.StallSeconds != 60 || routed.DeadSeconds != 300 {
+			t.Errorf("thresholds = %v/%v, want 60/300 from the default cadence", routed.StallSeconds, routed.DeadSeconds)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no payload published")
+	}
+}
+
+func TestIngestStampsInstanceIDAndNewRunGetsNewCard(t *testing.T) {
+	s := newIngestServer(t)
+	ctx := context.Background()
+	plaintext, err := s.store.CreateToken(ctx, "user-1", "t")
+	if err != nil {
+		t.Fatalf("CreateToken: %v", err)
+	}
+
+	ch, cancel := s.hub.Subscribe()
+	defer cancel()
+
+	// The client assigns the uuid; two updates of the same run carry the same one,
+	// a restart carries a new one.
+	post := func(uuid, progress string) bus.RoutedPayload {
+		body := `{"user_hostname":"h","script":"s","description":"d","uuid":"` + uuid +
+			`","progress":` + progress + `,"total":100,"key":"` + plaintext + `"}`
+		req := httptest.NewRequest("POST", "/handler", strings.NewReader(body))
+		req.RemoteAddr = "203.0.113.7:5555"
+		s.handleIngest(httptest.NewRecorder(), req)
+		select {
+		case routed := <-ch:
+			return routed
+		case <-time.After(time.Second):
+			t.Fatal("no payload published")
+			return bus.RoutedPayload{}
+		}
+	}
+
+	// The stamped card id is the client's uuid.
+	if got := post("run-a", "40").InstanceID; got != "run-a" {
+		t.Fatalf("instance id = %q, want the client uuid %q", got, "run-a")
+	}
+	// Same run (same uuid, progress advances) keeps the same card.
+	if same := post("run-a", "80").InstanceID; same != "run-a" {
+		t.Fatalf("advancing run changed card: %q != %q", same, "run-a")
+	}
+	// A restart (new uuid) opens a new card instead of reviving the old.
+	if restarted := post("run-b", "5").InstanceID; restarted == "run-a" {
+		t.Fatal("restart reused the old card id")
+	}
+}
+
+// A client too old to send a uuid falls back to the task key, so its updates
+// still route to a card (the pre-v3 behaviour, which cannot tell runs apart).
+func TestIngestFallsBackToTaskKeyWithoutUUID(t *testing.T) {
+	s := newIngestServer(t)
+	ctx := context.Background()
+	plaintext, err := s.store.CreateToken(ctx, "user-1", "t")
+	if err != nil {
+		t.Fatalf("CreateToken: %v", err)
+	}
+
+	ch, cancel := s.hub.Subscribe()
+	defer cancel()
+
+	body := `{"user_hostname":"h","script":"s","description":"d","progress":1,"total":100,"key":"` + plaintext + `"}`
+	req := httptest.NewRequest("POST", "/handler", strings.NewReader(body))
+	req.RemoteAddr = "203.0.113.7:5555"
+	s.handleIngest(httptest.NewRecorder(), req)
+
+	select {
+	case routed := <-ch:
+		if routed.InstanceID != "s:h:d" {
+			t.Errorf("InstanceID = %q, want the TaskKey fallback %q", routed.InstanceID, "s:h:d")
 		}
 	case <-time.After(time.Second):
 		t.Fatal("no payload published")
