@@ -22,6 +22,14 @@ import (
 
 const sessionName = "webprogress_session"
 
+// NoAuthSub is the fixed user identity used when the server runs with
+// authentication disabled (the --noauth flag). Every request is treated as this
+// local user, and ingested updates are routed to it without a token.
+const NoAuthSub = "noauth-local"
+
+// noAuthUser is the stand-in identity returned for every request in no-auth mode.
+var noAuthUser = User{Sub: NoAuthSub, Email: "local@localhost", Name: "Local (no auth)"}
+
 // unrestricted paths bypass the session guard. The ingest and health endpoints
 // self-authenticate or are intentionally public; the login round-trip routes
 // must be reachable while signed out.
@@ -41,14 +49,45 @@ type User struct {
 	Name  string
 }
 
-// Auth bundles the OIDC client, session store, and user persistence.
+// Auth bundles the OIDC client, session store, and user persistence. In no-auth
+// mode (noAuth true) the OIDC fields are unused: every request is the local
+// NoAuthUser and the page guard is bypassed.
 type Auth struct {
 	cfg      *config.Settings
 	store    *storage.Store
 	cookies  *sessions.CookieStore
 	oauth    oauth2.Config
 	verifier *oidc.IDTokenVerifier
+	noAuth   bool
 }
+
+// newCookieStore builds the signed session-cookie store shared by both modes.
+func newCookieStore(cfg *config.Settings) *sessions.CookieStore {
+	cookies := sessions.NewCookieStore([]byte(cfg.SessionSecret))
+	cookies.Options = &sessions.Options{
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   7 * 24 * 60 * 60, // one week
+	}
+	return cookies
+}
+
+// NewNoAuth builds an Auth with authentication disabled: no OIDC provider is
+// discovered, so it needs no OIDC configuration. It still carries a cookie store
+// for one-time flash messages. For testing only.
+func NewNoAuth(cfg *config.Settings, store *storage.Store) *Auth {
+	return &Auth{
+		cfg:     cfg,
+		store:   store,
+		cookies: newCookieStore(cfg),
+		noAuth:  true,
+	}
+}
+
+// NoAuth reports whether authentication is disabled. A nil Auth reports false,
+// so a partially-constructed server (as in some tests) enforces auth by default.
+func (a *Auth) NoAuth() bool { return a != nil && a.noAuth }
 
 // New builds an Auth by discovering the OIDC provider from its metadata URL.
 func New(ctx context.Context, cfg *config.Settings, store *storage.Store) (*Auth, error) {
@@ -58,18 +97,10 @@ func New(ctx context.Context, cfg *config.Settings, store *storage.Store) (*Auth
 		return nil, err
 	}
 
-	cookies := sessions.NewCookieStore([]byte(cfg.SessionSecret))
-	cookies.Options = &sessions.Options{
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   7 * 24 * 60 * 60, // one week
-	}
-
 	return &Auth{
 		cfg:     cfg,
 		store:   store,
-		cookies: cookies,
+		cookies: newCookieStore(cfg),
 		oauth: oauth2.Config{
 			ClientID:     cfg.OIDCClientID,
 			ClientSecret: cfg.OIDCClientSecret,
@@ -84,6 +115,10 @@ func New(ctx context.Context, cfg *config.Settings, store *storage.Store) (*Auth
 // Login begins sign-in: it stashes a fresh state and nonce in the session and
 // redirects the browser to the provider's authorization endpoint.
 func (a *Auth) Login(w http.ResponseWriter, r *http.Request) {
+	if a.noAuth {
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
 	session, _ := a.cookies.Get(r, sessionName)
 	state := randomString()
 	nonce := randomString()
@@ -99,6 +134,10 @@ func (a *Auth) Login(w http.ResponseWriter, r *http.Request) {
 // Callback is the provider's redirect target. It verifies the exchange, upserts
 // the user, marks the session authenticated, and returns to the dashboard.
 func (a *Auth) Callback(w http.ResponseWriter, r *http.Request) {
+	if a.noAuth {
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
 	ctx := r.Context()
 	session, _ := a.cookies.Get(r, sessionName)
 
@@ -162,6 +201,11 @@ func (a *Auth) Callback(w http.ResponseWriter, r *http.Request) {
 // Logout clears the local session and returns to login. It does not sign the user
 // out of the provider.
 func (a *Auth) Logout(w http.ResponseWriter, r *http.Request) {
+	if a.noAuth {
+		// There is no session to clear; logging out is a no-op in no-auth mode.
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
 	session, _ := a.cookies.Get(r, sessionName)
 	session.Options.MaxAge = -1
 	_ = session.Save(r, w)
@@ -170,6 +214,9 @@ func (a *Auth) Logout(w http.ResponseWriter, r *http.Request) {
 
 // CurrentUser returns the signed-in user for a request, or (zero, false).
 func (a *Auth) CurrentUser(r *http.Request) (User, bool) {
+	if a.noAuth {
+		return noAuthUser, true
+	}
 	session, _ := a.cookies.Get(r, sessionName)
 	if auth, _ := session.Values["authenticated"].(bool); !auth {
 		return User{}, false
@@ -205,6 +252,10 @@ func (a *Auth) PopFlash(w http.ResponseWriter, r *http.Request, key string) stri
 // Unrestricted routes and static assets are always allowed.
 func (a *Auth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.noAuth {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if _, ok := a.CurrentUser(r); ok {
 			next.ServeHTTP(w, r)
 			return

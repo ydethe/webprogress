@@ -81,3 +81,31 @@ func TestLoadFromEnv(t *testing.T) {
 		t.Errorf("default scope not applied: %q", cfg.OIDCScope)
 	}
 }
+
+func TestDefaultNotifyFromEnv(t *testing.T) {
+	t.Setenv("WEBPROGRESS_NOTIFY_CHANNEL", "slack")
+	t.Setenv("WEBPROGRESS_NOTIFY_SLACK_WEBHOOK_URL", "https://hooks.example.com/x")
+	t.Setenv("WEBPROGRESS_NOTIFY_STALL_SECONDS", "300")
+	cfg := Load()
+
+	n := cfg.DefaultNotify()
+	if string(n.Channel) != "slack" {
+		t.Errorf("channel = %q", n.Channel)
+	}
+	if n.SlackWebhookURL != "https://hooks.example.com/x" {
+		t.Errorf("slack url = %q", n.SlackWebhookURL)
+	}
+	if n.StallSeconds != 300 {
+		t.Errorf("stall seconds = %d", n.StallSeconds)
+	}
+	if err := n.Validate(); err != nil {
+		t.Errorf("env default should be valid: %v", err)
+	}
+}
+
+func TestEnvIntFallsBackOnGarbage(t *testing.T) {
+	t.Setenv("WEBPROGRESS_NOTIFY_STALL_SECONDS", "not-a-number")
+	if cfg := Load(); cfg.NotifyStallSeconds != 0 {
+		t.Errorf("NotifyStallSeconds = %d, want fallback 0", cfg.NotifyStallSeconds)
+	}
+}

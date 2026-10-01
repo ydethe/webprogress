@@ -4,6 +4,8 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+
+	"github.com/ydethe/webprogress/internal/notify"
 )
 
 func newTestStore(t *testing.T) *Store {
@@ -77,6 +79,61 @@ func TestRevokeIsUserScoped(t *testing.T) {
 	}
 	if _, ok := store.ResolveToken(ctx, plaintext); !ok {
 		t.Fatal("token was revoked by a non-owner")
+	}
+}
+
+func TestNotifyConfigCRUD(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+
+	// No row yet: not found, and the returned config is the disabled zero value.
+	cfg, ok, err := store.GetNotifyConfig(ctx, "user-1")
+	if err != nil {
+		t.Fatalf("GetNotifyConfig: %v", err)
+	}
+	if ok || cfg.Enabled() {
+		t.Fatalf("expected no persisted config, got ok=%v cfg=%+v", ok, cfg)
+	}
+
+	want := notify.Config{
+		Channel:       notify.ChannelPushover,
+		PushoverToken: "tok",
+		PushoverUser:  "usr",
+		StallSeconds:  120,
+	}
+	if err := store.SaveNotifyConfig(ctx, "user-1", want); err != nil {
+		t.Fatalf("SaveNotifyConfig: %v", err)
+	}
+	got, ok, err := store.GetNotifyConfig(ctx, "user-1")
+	if err != nil || !ok {
+		t.Fatalf("GetNotifyConfig after save: ok=%v err=%v", ok, err)
+	}
+	if got != want {
+		t.Fatalf("round-trip mismatch: got %+v want %+v", got, want)
+	}
+
+	// Upsert replaces the row in place.
+	want.Channel = notify.ChannelSlack
+	want.SlackWebhookURL = "https://hooks"
+	if err := store.SaveNotifyConfig(ctx, "user-1", want); err != nil {
+		t.Fatalf("SaveNotifyConfig update: %v", err)
+	}
+	got, _, _ = store.GetNotifyConfig(ctx, "user-1")
+	if got.Channel != notify.ChannelSlack || got.SlackWebhookURL != "https://hooks" {
+		t.Fatalf("update not applied: %+v", got)
+	}
+
+	// Configs are scoped per user.
+	if _, ok, _ := store.GetNotifyConfig(ctx, "user-2"); ok {
+		t.Fatal("another user should not see user-1's config")
+	}
+
+	// Clear reverts to "no row".
+	if err := store.ClearNotifyConfig(ctx, "user-1"); err != nil {
+		t.Fatalf("ClearNotifyConfig: %v", err)
+	}
+	if _, ok, _ := store.GetNotifyConfig(ctx, "user-1"); ok {
+		t.Fatal("config still present after clear")
 	}
 }
 

@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
+
+	"github.com/ydethe/webprogress/internal/notify"
 )
 
-// Settings holds OIDC, session, and storage configuration.
+// Settings holds OIDC, session, storage, and default notification configuration.
 type Settings struct {
 	OIDCClientID          string
 	OIDCClientSecret      string
@@ -21,6 +24,16 @@ type Settings struct {
 	BaseURL               string
 	SessionSecret         string
 	DBPath                string
+
+	// Notify* provide the server-wide default notification channel. They are
+	// used only for a user who has not saved their own settings, which always
+	// take precedence (see storage and server.effectiveNotify).
+	NotifyChannel         string
+	NotifyPushoverToken   string
+	NotifyPushoverUser    string
+	NotifySlackWebhookURL string
+	NotifyWebhookURL      string
+	NotifyStallSeconds    int
 }
 
 // Load reads settings from the environment, after best-effort loading a .env
@@ -39,6 +52,26 @@ func Load() *Settings {
 		BaseURL:               env("WEBPROGRESS_BASE_URL", "http://127.0.0.1:8775"),
 		SessionSecret:         env("WEBPROGRESS_SESSION_SECRET", "change-me"),
 		DBPath:                env("WEBPROGRESS_DB_PATH", "webprogress.db"),
+
+		NotifyChannel:         env("WEBPROGRESS_NOTIFY_CHANNEL", ""),
+		NotifyPushoverToken:   env("WEBPROGRESS_NOTIFY_PUSHOVER_TOKEN", ""),
+		NotifyPushoverUser:    env("WEBPROGRESS_NOTIFY_PUSHOVER_USER", ""),
+		NotifySlackWebhookURL: env("WEBPROGRESS_NOTIFY_SLACK_WEBHOOK_URL", ""),
+		NotifyWebhookURL:      env("WEBPROGRESS_NOTIFY_WEBHOOK_URL", ""),
+		NotifyStallSeconds:    envInt("WEBPROGRESS_NOTIFY_STALL_SECONDS", 0),
+	}
+}
+
+// DefaultNotify is the server-wide fallback notification config, assembled from
+// the WEBPROGRESS_NOTIFY_* env vars. A user's persisted settings override it.
+func (s *Settings) DefaultNotify() notify.Config {
+	return notify.Config{
+		Channel:         notify.Channel(s.NotifyChannel),
+		PushoverToken:   s.NotifyPushoverToken,
+		PushoverUser:    s.NotifyPushoverUser,
+		SlackWebhookURL: s.NotifySlackWebhookURL,
+		WebhookURL:      s.NotifyWebhookURL,
+		StallSeconds:    s.NotifyStallSeconds,
 	}
 }
 
@@ -82,6 +115,12 @@ func (s *Settings) LogConfig() {
 	log.Printf("  session_secret = %s", mask(s.SessionSecret))
 	log.Printf("  db_path = %s", s.DBPath)
 	log.Printf("  redirect_uri = %s", s.RedirectURI())
+	log.Printf("  notify_channel = %s", s.NotifyChannel)
+	log.Printf("  notify_pushover_token = %s", mask(s.NotifyPushoverToken))
+	log.Printf("  notify_pushover_user = %s", mask(s.NotifyPushoverUser))
+	log.Printf("  notify_slack_webhook_url = %s", mask(s.NotifySlackWebhookURL))
+	log.Printf("  notify_webhook_url = %s", mask(s.NotifyWebhookURL))
+	log.Printf("  notify_stall_seconds = %d", s.NotifyStallSeconds)
 }
 
 func mask(v string) string {
@@ -94,6 +133,15 @@ func mask(v string) string {
 func env(key, def string) string {
 	if v, ok := os.LookupEnv(key); ok {
 		return v
+	}
+	return def
+}
+
+func envInt(key string, def int) int {
+	if v, ok := os.LookupEnv(key); ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return n
+		}
 	}
 	return def
 }

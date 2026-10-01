@@ -30,12 +30,22 @@ under `internal/`, split into packages connected by the shared payload model:
   to.
 - **`internal/config`** — `Settings` loaded from `WEBPROGRESS_*` env vars (and an optional `.env` via
   godotenv). `RequireOIDC()` fails fast if the OIDC settings are missing; `RedirectURI()` derives the
-  `/auth` callback from `BaseURL`; `LogConfig()` logs settings with secrets masked.
+  `/auth` callback from `BaseURL`; `LogConfig()` logs settings with secrets masked. The `WEBPROGRESS_NOTIFY_*`
+  vars feed `DefaultNotify()`, the server-wide fallback notification config (a persisted per-user config
+  always overrides it).
+- **`internal/notify`** — out-of-band task alerts, independent of the Python wire contract. `Config`
+  describes one user's channel (`pushover`, `slack`, `webhook`, or empty/off) plus a `StallSeconds`
+  timeout; `Send` delivers a `Message` over it. The `Dispatcher` subscribes to the `bus.Hub` and fires a
+  one-shot notification when a task completes (fraction ≥ 1) or stalls (no update within `StallSeconds`);
+  all task bookkeeping runs on its single `Run` goroutine, so only the outbound HTTP send is off-loaded.
+  A `Resolver` func supplies each user's effective `Config`. This package imports neither `config` nor
+  `storage`, so both depend on it without a cycle.
 - **`internal/storage`** — SQLite (`modernc.org/sqlite`, pure Go, no cgo) with `users` and `tokens`
   tables. Users are keyed by OIDC `sub`. Tokens are minted server-side; only their SHA-256 hash and a
   short prefix are stored, so the plaintext is shown once at creation. A token is bound to the user that
-  created it — that binding is how an incoming payload is routed. Methods: `Open`/`initDB`, `UpsertUser`,
-  `CreateToken`, `ResolveToken`, `ListTokens`, `RevokeToken`.
+  created it — that binding is how an incoming payload is routed. The `notify_settings` table holds each
+  user's persisted notification config. Methods: `Open`/`initDB`, `UpsertUser`, `CreateToken`,
+  `ResolveToken`, `ListTokens`, `RevokeToken`, `GetNotifyConfig`, `SaveNotifyConfig`, `ClearNotifyConfig`.
 - **`internal/bus`** — the in-process pub/sub `Hub`. The ingest handler `Publish`es a `RoutedPayload`
   (payload + `UserSub`); each open dashboard connection `Subscribe`s. This publish/subscribe step is the
   core rendering mechanism. `Publish` is non-blocking (drops to a full subscriber) so a slow dashboard
@@ -53,9 +63,15 @@ under `internal/`, split into packages connected by the shared payload model:
   subscribes to the hub, and forwards only updates where `UserSub` matches the viewer (per-user isolation
   at render). The WebSocket frame carries `script`, and the dashboard groups tasks three levels deep —
   **script ▸ deployable (host/login) ▸ task** — in `web/static/app.js`. `POST /tokens/create` and
-  `/tokens/revoke` manage tokens; the new token's plaintext is shown once via a session flash. HTML
-  template and JS live under `internal/server/web/` and are embedded with `go:embed`. `Run()` loads config,
-  validates OIDC, initialises the DB, builds the OIDC provider, and serves on port **8775**.
+  `/tokens/revoke` manage tokens; the new token's plaintext is shown once via a session flash.
+  `POST /settings/notify`, `/settings/notify/reset`, and `/settings/notify/test` manage per-user
+  notification settings from the dashboard's Settings menu; `effectiveNotify` resolves a user's config
+  (persisted settings if present, else the env default). HTML template and JS live under
+  `internal/server/web/` and are embedded with `go:embed`. `Run(noAuth)` loads config, initialises the DB,
+  builds auth (validating OIDC and the provider, unless `noAuth`), starts the `notify.Dispatcher` on the
+  hub, and serves on port **8775**. With `noAuth` (the `--noauth` CLI flag, testing only) OIDC is skipped:
+  `auth.NewNoAuth` treats every request as the fixed `auth.NoAuthSub` user and bypasses the page guard, and
+  `handleIngest` routes updates to that user without a token.
 
 Authentication (token → user) happens in `POST /handler` via `storage.ResolveToken`; per-user routing
 happens again in the WebSocket loop via the `UserSub` filter — the two isolation checkpoints described in

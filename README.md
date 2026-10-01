@@ -70,6 +70,25 @@ variables (or a `.env` file):
 | `WEBPROGRESS_BASE_URL` | Public base URL, used to build the `/auth` redirect (default `http://127.0.0.1:8775`) |
 | `WEBPROGRESS_SESSION_SECRET` | Secret signing session cookies — set a strong value in production |
 | `WEBPROGRESS_DB_PATH` | SQLite database path (default `webprogress.db`) |
+| `WEBPROGRESS_NOTIFY_CHANNEL` | Default notification channel: `pushover`, `slack`, `webhook`, or empty for off |
+| `WEBPROGRESS_NOTIFY_PUSHOVER_TOKEN` / `_USER` | Pushover application token and user/group key |
+| `WEBPROGRESS_NOTIFY_SLACK_WEBHOOK_URL` | Slack incoming-webhook URL |
+| `WEBPROGRESS_NOTIFY_WEBHOOK_URL` | Custom webhook URL (receives a JSON event payload) |
+| `WEBPROGRESS_NOTIFY_STALL_SECONDS` | Alert when a task goes this many seconds without an update (`0` = off) |
+
+### Notifications
+
+The server can alert you out-of-band when a tracked task **completes** or
+**stalls** (goes silent for longer than the stall timeout). Three channels are
+supported: [Pushover](https://pushover.net), a Slack *incoming webhook*, or a
+custom webhook that receives a JSON body (`{event, title, message, task}`).
+
+Configuration is **per user** and lives behind the **Settings** menu in the
+dashboard navigation bar — pick a channel, fill in the credentials, set a stall
+timeout, and use **Test** to send a sample. The `WEBPROGRESS_NOTIFY_*` env vars
+above provide a server-wide default used only until a user saves their own
+settings; **a user's saved settings always take precedence over the env default**,
+and **Reset to server defaults** removes them again.
 
 Then build and start it:
 
@@ -88,6 +107,18 @@ go build -ldflags "-X github.com/ydethe/webprogress/internal/server.Version=$(gi
 
 The app serves on port **8775**. Log in, generate a token, and use it as your
 client's `key` / `WEBPROGRESS_KEY`.
+
+### Testing without authentication
+
+Pass `--noauth` to disable authentication entirely — for local testing only:
+
+```bash
+./webprogress --noauth
+```
+
+No OIDC configuration is required, the dashboard opens without a login, and
+`POST /handler` accepts updates with no token (every update is routed to a single
+local user). **Never run this in production.**
 
 ### Docker
 

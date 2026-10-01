@@ -18,6 +18,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/ydethe/webprogress/internal/notify"
 )
 
 // prefixLen is the number of leading plaintext characters kept for display.
@@ -71,6 +73,16 @@ CREATE TABLE IF NOT EXISTS tokens (
     prefix     TEXT,
     created_at TEXT,
     revoked    INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS notify_settings (
+    user_sub       TEXT PRIMARY KEY,
+    channel        TEXT    NOT NULL DEFAULT '',
+    pushover_token TEXT    NOT NULL DEFAULT '',
+    pushover_user  TEXT    NOT NULL DEFAULT '',
+    slack_webhook  TEXT    NOT NULL DEFAULT '',
+    webhook_url    TEXT    NOT NULL DEFAULT '',
+    stall_seconds  INTEGER NOT NULL DEFAULT 0,
+    updated_at     TEXT
 );`
 	_, err := s.db.Exec(schema)
 	return err
@@ -151,6 +163,58 @@ ORDER BY created_at DESC`
 func (s *Store) RevokeToken(ctx context.Context, sub, tokenHash string) error {
 	const q = `UPDATE tokens SET revoked = 1 WHERE token_hash = ? AND user_sub = ?`
 	_, err := s.db.ExecContext(ctx, q, tokenHash, sub)
+	return err
+}
+
+// GetNotifyConfig returns a user's persisted notification config and whether a
+// row exists for them. Callers treat "no row" as "fall back to env defaults";
+// a stored row always takes precedence, even one that disables notifications.
+func (s *Store) GetNotifyConfig(ctx context.Context, sub string) (notify.Config, bool, error) {
+	const q = `
+SELECT channel, pushover_token, pushover_user, slack_webhook, webhook_url, stall_seconds
+FROM notify_settings WHERE user_sub = ?`
+	var (
+		cfg     notify.Config
+		channel string
+	)
+	err := s.db.QueryRowContext(ctx, q, sub).Scan(
+		&channel, &cfg.PushoverToken, &cfg.PushoverUser,
+		&cfg.SlackWebhookURL, &cfg.WebhookURL, &cfg.StallSeconds)
+	switch {
+	case err == nil:
+		cfg.Channel = notify.Channel(channel)
+		return cfg, true, nil
+	case errors.Is(err, sql.ErrNoRows):
+		return notify.Config{}, false, nil
+	default:
+		return notify.Config{}, false, err
+	}
+}
+
+// SaveNotifyConfig upserts a user's notification config, replacing any prior row.
+func (s *Store) SaveNotifyConfig(ctx context.Context, sub string, cfg notify.Config) error {
+	const q = `
+INSERT INTO notify_settings
+    (user_sub, channel, pushover_token, pushover_user, slack_webhook, webhook_url, stall_seconds, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(user_sub) DO UPDATE SET
+    channel        = excluded.channel,
+    pushover_token = excluded.pushover_token,
+    pushover_user  = excluded.pushover_user,
+    slack_webhook  = excluded.slack_webhook,
+    webhook_url    = excluded.webhook_url,
+    stall_seconds  = excluded.stall_seconds,
+    updated_at     = excluded.updated_at`
+	_, err := s.db.ExecContext(ctx, q,
+		sub, string(cfg.Channel), cfg.PushoverToken, cfg.PushoverUser,
+		cfg.SlackWebhookURL, cfg.WebhookURL, cfg.StallSeconds, now())
+	return err
+}
+
+// ClearNotifyConfig removes a user's persisted config so they fall back to the
+// server-wide env defaults again.
+func (s *Store) ClearNotifyConfig(ctx context.Context, sub string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM notify_settings WHERE user_sub = ?`, sub)
 	return err
 }
 

@@ -13,13 +13,14 @@ import (
 
 func main() {
 	healthcheck := flag.Bool("healthcheck", false, "probe the local /health endpoint and exit 0 (ok) or 1 (fail)")
+	noauth := flag.Bool("noauth", false, "disable authentication entirely (testing only): no OIDC login, and ingest needs no token")
 	flag.Parse()
 
 	if *healthcheck {
 		os.Exit(runHealthcheck())
 	}
 
-	if err := server.Run(); err != nil {
+	if err := server.Run(*noauth); err != nil {
 		log.Fatalf("webprogress: %v", err)
 	}
 }

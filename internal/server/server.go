@@ -12,6 +12,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -20,6 +22,7 @@ import (
 	"github.com/ydethe/webprogress/internal/bus"
 	"github.com/ydethe/webprogress/internal/config"
 	"github.com/ydethe/webprogress/internal/models"
+	"github.com/ydethe/webprogress/internal/notify"
 	"github.com/ydethe/webprogress/internal/storage"
 )
 
@@ -83,8 +86,21 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /ws", s.handleWS)
 	mux.HandleFunc("POST /tokens/create", s.handleTokenCreate)
 	mux.HandleFunc("POST /tokens/revoke", s.handleTokenRevoke)
+	mux.HandleFunc("POST /settings/notify", s.handleNotifySave)
+	mux.HandleFunc("POST /settings/notify/reset", s.handleNotifyReset)
+	mux.HandleFunc("POST /settings/notify/test", s.handleNotifyTest)
 
 	return s.auth.Middleware(mux)
+}
+
+// effectiveNotify returns the notification config in force for a user: their
+// persisted settings if they have saved any, otherwise the server-wide env
+// defaults. The bool reports whether the config came from persisted settings.
+func (s *Server) effectiveNotify(ctx context.Context, sub string) (notify.Config, bool) {
+	if cfg, ok, err := s.store.GetNotifyConfig(ctx, sub); err == nil && ok {
+		return cfg, true
+	}
+	return s.cfg.DefaultNotify(), false
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -112,10 +128,16 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	userSub, ok := s.store.ResolveToken(r.Context(), payload.Key)
-	if !ok {
-		w.WriteHeader(http.StatusUnauthorized)
-		return
+	// In no-auth mode every update belongs to the single local user and no token
+	// is required; otherwise the token authenticates and routes the sender.
+	userSub := auth.NoAuthSub
+	if !s.auth.NoAuth() {
+		sub, ok := s.store.ResolveToken(r.Context(), payload.Key)
+		if !ok {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		userSub = sub
 	}
 	payload.UserSrcAddress = clientHost(r)
 	s.hub.Publish(bus.RoutedPayload{UserSub: userSub, Payload: payload})
@@ -204,11 +226,37 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 // dashboardData is the template model for the dashboard page.
 type dashboardData struct {
-	Name     string
-	Tokens   []storage.Token
-	NewToken string
-	Version  string
-	Protocol int
+	Name      string
+	Tokens    []storage.Token
+	NewToken  string
+	Version   string
+	Protocol  int
+	Notify    notifyView
+	NotifyMsg string // one-time flash shown after saving/testing settings
+}
+
+// notifyView is the flattened notification config the Settings form renders and
+// edits. Channel is a plain string so html/template comparisons stay simple.
+type notifyView struct {
+	Channel       string
+	PushoverToken string
+	PushoverUser  string
+	SlackWebhook  string
+	WebhookURL    string
+	StallSeconds  int
+	Persisted     bool // true when these values come from the user's saved settings
+}
+
+func toNotifyView(cfg notify.Config, persisted bool) notifyView {
+	return notifyView{
+		Channel:       string(cfg.Channel),
+		PushoverToken: cfg.PushoverToken,
+		PushoverUser:  cfg.PushoverUser,
+		SlackWebhook:  cfg.SlackWebhookURL,
+		WebhookURL:    cfg.WebhookURL,
+		StallSeconds:  cfg.StallSeconds,
+		Persisted:     persisted,
+	}
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -222,12 +270,15 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cannot list tokens", http.StatusInternalServerError)
 		return
 	}
+	notifyCfg, persisted := s.effectiveNotify(r.Context(), user.Sub)
 	data := dashboardData{
-		Name:     user.Name,
-		Tokens:   tokens,
-		NewToken: s.auth.PopFlash(w, r, "new_token"),
-		Version:  Version,
-		Protocol: models.ProtocolVersion,
+		Name:      user.Name,
+		Tokens:    tokens,
+		NewToken:  s.auth.PopFlash(w, r, "new_token"),
+		Version:   Version,
+		Protocol:  models.ProtocolVersion,
+		Notify:    toNotifyView(notifyCfg, persisted),
+		NotifyMsg: s.auth.PopFlash(w, r, "notify_msg"),
 	}
 	if err := s.tmpl.ExecuteTemplate(w, "dashboard.html", data); err != nil {
 		log.Printf("render dashboard: %v", err)
@@ -268,14 +319,88 @@ func (s *Server) handleTokenRevoke(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
-// Run loads configuration, validates OIDC, opens storage, wires the server, and
-// serves on the fixed port until the process is stopped.
-func Run() error {
+// notifyConfigFromForm builds a notify.Config from the Settings form fields.
+func notifyConfigFromForm(r *http.Request) notify.Config {
+	stall, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("stall_seconds")))
+	return notify.Config{
+		Channel:         notify.Channel(strings.TrimSpace(r.FormValue("channel"))),
+		PushoverToken:   strings.TrimSpace(r.FormValue("pushover_token")),
+		PushoverUser:    strings.TrimSpace(r.FormValue("pushover_user")),
+		SlackWebhookURL: strings.TrimSpace(r.FormValue("slack_webhook")),
+		WebhookURL:      strings.TrimSpace(r.FormValue("webhook_url")),
+		StallSeconds:    stall,
+	}
+}
+
+// handleNotifySave validates and persists the signed-in user's notification
+// settings. A persisted config always wins over the env-var defaults.
+func (s *Server) handleNotifySave(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.auth.CurrentUser(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	cfg := notifyConfigFromForm(r)
+	if err := cfg.Validate(); err != nil {
+		s.auth.Flash(w, r, "notify_msg", "Could not save: "+err.Error())
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
+	if err := s.store.SaveNotifyConfig(r.Context(), user.Sub, cfg); err != nil {
+		http.Error(w, "cannot save notification settings", http.StatusInternalServerError)
+		return
+	}
+	s.auth.Flash(w, r, "notify_msg", "Notification settings saved.")
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+// handleNotifyReset drops the user's saved settings so they fall back to the
+// server-wide env defaults.
+func (s *Server) handleNotifyReset(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.auth.CurrentUser(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	if err := s.store.ClearNotifyConfig(r.Context(), user.Sub); err != nil {
+		http.Error(w, "cannot reset notification settings", http.StatusInternalServerError)
+		return
+	}
+	s.auth.Flash(w, r, "notify_msg", "Reverted to server defaults.")
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+// handleNotifyTest sends a one-off test notification over the user's effective
+// config so they can confirm the channel works.
+func (s *Server) handleNotifyTest(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.auth.CurrentUser(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	cfg, _ := s.effectiveNotify(r.Context(), user.Sub)
+	switch {
+	case !cfg.Enabled():
+		s.auth.Flash(w, r, "notify_msg", "No channel configured — nothing to test.")
+	default:
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		if err := notify.Send(ctx, nil, cfg, notify.TestMessage()); err != nil {
+			s.auth.Flash(w, r, "notify_msg", "Test failed: "+err.Error())
+		} else {
+			s.auth.Flash(w, r, "notify_msg", "Test notification sent.")
+		}
+	}
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+// Run loads configuration, opens storage, wires the server, and serves on the
+// fixed port until the process is stopped. With noAuth set, OIDC is skipped
+// entirely (for testing): the dashboard needs no login and ingest needs no
+// token — see the --noauth flag.
+func Run(noAuth bool) error {
 	cfg := config.Load()
 	cfg.LogConfig()
-	if err := cfg.RequireOIDC(); err != nil {
-		return err
-	}
 
 	store, err := storage.Open(cfg.DBPath)
 	if err != nil {
@@ -283,15 +408,37 @@ func Run() error {
 	}
 	defer store.Close()
 
-	a, err := auth.New(context.Background(), cfg, store)
+	var a *auth.Auth
+	if noAuth {
+		log.Printf("webprogress: --noauth set; authentication is DISABLED — do not use in production")
+		// Record the local user so its tokens and settings persist like any other.
+		if err := store.UpsertUser(context.Background(), auth.NoAuthSub, "local@localhost", "Local (no auth)"); err != nil {
+			return err
+		}
+		a = auth.NewNoAuth(cfg, store)
+	} else {
+		if err := cfg.RequireOIDC(); err != nil {
+			return err
+		}
+		a, err = auth.New(context.Background(), cfg, store)
+		if err != nil {
+			return err
+		}
+	}
+
+	hub := bus.New()
+	srv, err := New(cfg, store, hub, a)
 	if err != nil {
 		return err
 	}
 
-	srv, err := New(cfg, store, bus.New(), a)
-	if err != nil {
-		return err
-	}
+	// The notification dispatcher watches the same bus as the dashboard and
+	// delivers completion/stall alerts over each user's effective channel.
+	dispatcher := notify.NewDispatcher(func(ctx context.Context, sub string) notify.Config {
+		cfg, _ := srv.effectiveNotify(ctx, sub)
+		return cfg
+	})
+	go dispatcher.Run(context.Background(), hub)
 
 	addr := ":" + Port
 	log.Printf("webprogress server version %s (protocol v%d)", Version, models.ProtocolVersion)
