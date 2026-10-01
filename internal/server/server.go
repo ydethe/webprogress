@@ -207,6 +207,8 @@ type dashboardData struct {
 	Name     string
 	Tokens   []storage.Token
 	NewToken string
+	Version  string
+	Protocol int
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -224,6 +226,8 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		Name:     user.Name,
 		Tokens:   tokens,
 		NewToken: s.auth.PopFlash(w, r, "new_token"),
+		Version:  Version,
+		Protocol: models.ProtocolVersion,
 	}
 	if err := s.tmpl.ExecuteTemplate(w, "dashboard.html", data); err != nil {
 		log.Printf("render dashboard: %v", err)
