@@ -19,7 +19,41 @@
           <p class="text-xs text-slate-400">{{ .Name }}</p>
         </div>
       </div>
-      <a href="/logout" class="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-300 transition hover:bg-slate-800">Log out</a>
+      <div class="flex items-center gap-2">
+        <details id="tokens-menu" class="relative">
+          <summary class="flex cursor-pointer list-none items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-300 transition hover:bg-slate-800 select-none">
+            Tokens
+            <span class="rounded-full bg-slate-800 px-1.5 text-xs tabular-nums text-slate-400">{{ len .Tokens }}</span>
+          </summary>
+          <div class="absolute right-0 z-20 mt-2 w-80 rounded-xl border border-slate-800 bg-slate-900 p-4 shadow-xl shadow-black/40">
+            <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-400">Tokens</h2>
+
+            <form method="post" action="/tokens/create" class="mt-3 flex gap-2">
+              <input name="label" placeholder="Label (e.g. my-laptop)"
+                     class="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none">
+              <button class="rounded-lg bg-indigo-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-indigo-400">Add</button>
+            </form>
+
+            <ul class="mt-4 max-h-80 divide-y divide-slate-800 overflow-y-auto">
+              {{ range .Tokens }}
+              <li class="flex items-center justify-between py-3">
+                <div class="min-w-0">
+                  <p class="truncate text-sm font-medium">{{ .Label }} <span class="text-slate-500">({{ .Prefix }}…)</span></p>
+                  <p class="text-xs text-slate-500">{{ .CreatedAt }}</p>
+                </div>
+                <form method="post" action="/tokens/revoke">
+                  <input type="hidden" name="token_hash" value="{{ .Hash }}">
+                  <button class="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-rose-300 transition hover:bg-rose-500/10 hover:border-rose-500/40">Revoke</button>
+                </form>
+              </li>
+              {{ else }}
+              <li class="py-3 text-sm text-slate-500">No active tokens. Generate one to start reporting.</li>
+              {{ end }}
+            </ul>
+          </div>
+        </details>
+        <a href="/logout" class="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-300 transition hover:bg-slate-800">Log out</a>
+      </div>
     </div>
   </header>
 
@@ -33,46 +67,36 @@
     {{ end }}
 
     <!-- Live progress -->
-    <section>
-      <div class="mb-4 flex items-center gap-2">
+    <details id="live-section" open class="group">
+      <summary class="flex cursor-pointer list-none items-center gap-2 select-none">
+        <svg class="h-4 w-4 shrink-0 text-slate-500 transition-transform group-open:rotate-90" viewBox="0 0 20 20" fill="currentColor"><path d="M7 5l6 5-6 5V5z"/></svg>
         <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-400">Live tasks</h2>
         <span id="conn" class="inline-flex items-center gap-1.5 text-xs text-slate-500">
           <span id="conn-dot" class="h-2 w-2 rounded-full bg-slate-600"></span><span id="conn-text">connecting…</span>
         </span>
+      </summary>
+      <div class="mt-4">
+        <div id="tasks" class="grid gap-4 sm:grid-cols-2"></div>
+        <p id="empty" class="rounded-xl border border-dashed border-slate-800 px-6 py-10 text-center text-sm text-slate-500">
+          No tasks yet. Run a tracked task with one of your tokens to see it here live.
+        </p>
       </div>
-      <div id="tasks" class="grid gap-4 sm:grid-cols-2"></div>
-      <p id="empty" class="rounded-xl border border-dashed border-slate-800 px-6 py-10 text-center text-sm text-slate-500">
-        No tasks yet. Run a tracked task with one of your tokens to see it here live.
-      </p>
-    </section>
+    </details>
 
-    <!-- Token management -->
-    <section class="rounded-xl border border-slate-800 bg-slate-900/40 p-6">
-      <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-400">Tokens</h2>
-
-      <form method="post" action="/tokens/create" class="mt-4 flex gap-2">
-        <input name="label" placeholder="Label (e.g. my-laptop)"
-               class="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none">
-        <button class="rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-400">Generate</button>
-      </form>
-
-      <ul class="mt-5 divide-y divide-slate-800">
-        {{ range .Tokens }}
-        <li class="flex items-center justify-between py-3">
-          <div>
-            <p class="text-sm font-medium">{{ .Label }} <span class="text-slate-500">({{ .Prefix }}…)</span></p>
-            <p class="text-xs text-slate-500">{{ .CreatedAt }}</p>
-          </div>
-          <form method="post" action="/tokens/revoke">
-            <input type="hidden" name="token_hash" value="{{ .Hash }}">
-            <button class="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-rose-300 transition hover:bg-rose-500/10 hover:border-rose-500/40">Revoke</button>
-          </form>
-        </li>
-        {{ else }}
-        <li class="py-3 text-sm text-slate-500">No active tokens. Generate one to start reporting.</li>
-        {{ end }}
-      </ul>
-    </section>
+    <!-- Finished tasks -->
+    <details id="finished-section" class="group">
+      <summary class="flex cursor-pointer list-none items-center gap-2 select-none">
+        <svg class="h-4 w-4 shrink-0 text-slate-500 transition-transform group-open:rotate-90" viewBox="0 0 20 20" fill="currentColor"><path d="M7 5l6 5-6 5V5z"/></svg>
+        <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-400">Finished tasks</h2>
+        <span id="finished-count" class="rounded-full bg-slate-800 px-2 py-0.5 text-xs tabular-nums text-slate-400">0</span>
+      </summary>
+      <div class="mt-4">
+        <div id="finished-tasks" class="grid gap-4 sm:grid-cols-2"></div>
+        <p id="finished-empty" class="rounded-xl border border-dashed border-slate-800 px-6 py-10 text-center text-sm text-slate-500">
+          No finished tasks yet. A task moves here when it reaches 100%.
+        </p>
+      </div>
+    </details>
   </main>
 
   <script src="/static/app.js"></script>

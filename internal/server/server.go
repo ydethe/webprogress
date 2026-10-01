@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -103,12 +104,27 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// wsMessage is the per-task frame pushed to the browser.
+// wsMessage is the per-task frame pushed to the browser. Beyond the fields used
+// to draw the bar (key/label/value/colour) it carries the derived detail the
+// dashboard reveals when a task card is unfolded. This frame is internal to the
+// browser and independent of the Python wire contract (models.ClientPayload), so
+// it may grow freely without touching client compatibility.
 type wsMessage struct {
-	Key    string  `json:"key"`
-	Label  string  `json:"label"`
-	Value  float64 `json:"value"`
-	Colour string  `json:"colour"`
+	Key         string  `json:"key"`
+	Label       string  `json:"label"`
+	Value       float64 `json:"value"`
+	Colour      string  `json:"colour"`
+	Description string  `json:"description"`
+	Host        string  `json:"host"`
+	Login       string  `json:"login"`
+	SrcAddress  string  `json:"src_address"`
+	Progress    float64 `json:"progress"`
+	Total       float64 `json:"total"`
+	Elapsed     float64 `json:"elapsed"`
+	Rate        float64 `json:"rate"`
+	Unit        string  `json:"unit"`
+	Remaining   float64 `json:"remaining"`
+	ETA         string  `json:"eta"`
 }
 
 // handleWS upgrades to a WebSocket, subscribes to the hub, and forwards only the
@@ -144,10 +160,21 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 		p := routed.Payload
 		msg := wsMessage{
-			Key:    p.TaskKey(),
-			Label:  dashboardLabel(p),
-			Value:  p.Fraction(),
-			Colour: p.Colour,
+			Key:         p.TaskKey(),
+			Label:       dashboardLabel(p),
+			Value:       p.Fraction(),
+			Colour:      p.Colour,
+			Description: p.Description,
+			Host:        p.UserHostname,
+			Login:       p.UserLogin,
+			SrcAddress:  p.UserSrcAddress,
+			Progress:    p.Progress,
+			Total:       p.Total,
+			Elapsed:     p.Elapsed,
+			Rate:        p.Rate,
+			Unit:        p.Unit,
+			Remaining:   p.RemainingTime(),
+			ETA:         p.ETA().Format(time.RFC3339),
 		}
 		if err := conn.WriteJSON(msg); err != nil {
 			return
