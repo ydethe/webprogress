@@ -20,15 +20,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Full history + tags so the SCM-derived package version resolves.
+          # Full history + tags so the image version can be derived from the tag.
           fetch-depth: 0
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Build wheel
-        # The Dockerfile installs from dist/*.whl, so build it first.
-        run: uv build
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3

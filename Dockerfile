@@ -1,34 +1,28 @@
-# Image that runs the webprogress server (NiceGUI app on port 8775).
-# The client is a library used elsewhere; it is not run from this image.
-FROM python:3.12-slim
+# Image that runs the webprogress server (Go, on port 8775).
+# The client is the Python tqdm library used elsewhere; it is not run from this image.
 
-# curl is used by the healthcheck (and handy for debugging inside the container).
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/*
+# --- build stage ---
+FROM golang:1.26 AS build
+WORKDIR /src
 
-# uv provides fast, reproducible installs from uv.lock.
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# Cache module downloads independently of the source.
+COPY go.mod go.sum ./
+RUN go mod download
 
-ENV PYTHONUNBUFFERED=1 \
-    UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+COPY . .
+# Pure-Go build (modernc SQLite) → a static binary, so the final image needs no libc.
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/webprogress ./cmd/webprogress
 
-WORKDIR /app
+# --- runtime stage ---
+FROM gcr.io/distroless/static:nonroot
+COPY --from=build /out/webprogress /webprogress
 
-# The package version is derived from git tags via SCM, so .git must be present
-# at build time for the install to succeed.
-COPY dist/*.whl .
-
-# Install only runtime dependencies (no dev/test/doc groups) into /app/.venv.
-RUN uv pip install --system ./*.whl
-
-# NiceGUI serves on 8775 (see server.run()).
+# The server listens on 8775 (see internal/server.Port).
 EXPOSE 8775
 
-# Probe the unauthenticated /health route so the orchestrator knows when the app is up.
+# Probe /health via the binary's own flag — no curl needed on a distroless base.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8775/health || exit 1
+    CMD ["/webprogress", "--healthcheck"]
 
 # OIDC and session configuration is supplied at runtime via WEBPROGRESS_* env vars.
-CMD ["uv", "run", "python", "-c", "from webprogress.server import run; run()"]
+ENTRYPOINT ["/webprogress"]

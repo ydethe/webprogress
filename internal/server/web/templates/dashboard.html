@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>webprogress</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { darkMode: 'class' };
+  </script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen antialiased">
+  <header class="sticky top-0 z-10 border-b border-slate-800 bg-slate-950/80 backdrop-blur">
+    <div class="mx-auto max-w-5xl flex items-center justify-between px-6 py-4">
+      <div class="flex items-center gap-3">
+        <span class="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-sky-400 font-bold">w</span>
+        <div>
+          <h1 class="text-lg font-semibold leading-tight">webprogress</h1>
+          <p class="text-xs text-slate-400">{{ .Name }}</p>
+        </div>
+      </div>
+      <a href="/logout" class="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-300 transition hover:bg-slate-800">Log out</a>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-5xl space-y-8 px-6 py-8">
+
+    {{ if .NewToken }}
+    <div class="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4">
+      <p class="text-sm font-medium text-amber-300">Copy this token now — it will not be shown again.</p>
+      <code class="mt-2 block break-all rounded-lg bg-slate-900 px-3 py-2 font-mono text-sm text-amber-200">{{ .NewToken }}</code>
+    </div>
+    {{ end }}
+
+    <!-- Live progress -->
+    <section>
+      <div class="mb-4 flex items-center gap-2">
+        <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-400">Live tasks</h2>
+        <span id="conn" class="inline-flex items-center gap-1.5 text-xs text-slate-500">
+          <span id="conn-dot" class="h-2 w-2 rounded-full bg-slate-600"></span><span id="conn-text">connecting…</span>
+        </span>
+      </div>
+      <div id="tasks" class="grid gap-4 sm:grid-cols-2"></div>
+      <p id="empty" class="rounded-xl border border-dashed border-slate-800 px-6 py-10 text-center text-sm text-slate-500">
+        No tasks yet. Run a tracked task with one of your tokens to see it here live.
+      </p>
+    </section>
+
+    <!-- Token management -->
+    <section class="rounded-xl border border-slate-800 bg-slate-900/40 p-6">
+      <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-400">Tokens</h2>
+
+      <form method="post" action="/tokens/create" class="mt-4 flex gap-2">
+        <input name="label" placeholder="Label (e.g. my-laptop)"
+               class="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none">
+        <button class="rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-400">Generate</button>
+      </form>
+
+      <ul class="mt-5 divide-y divide-slate-800">
+        {{ range .Tokens }}
+        <li class="flex items-center justify-between py-3">
+          <div>
+            <p class="text-sm font-medium">{{ .Label }} <span class="text-slate-500">({{ .Prefix }}…)</span></p>
+            <p class="text-xs text-slate-500">{{ .CreatedAt }}</p>
+          </div>
+          <form method="post" action="/tokens/revoke">
+            <input type="hidden" name="token_hash" value="{{ .Hash }}">
+            <button class="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-rose-300 transition hover:bg-rose-500/10 hover:border-rose-500/40">Revoke</button>
+          </form>
+        </li>
+        {{ else }}
+        <li class="py-3 text-sm text-slate-500">No active tokens. Generate one to start reporting.</li>
+        {{ end }}
+      </ul>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
