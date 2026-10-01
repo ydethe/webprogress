@@ -1,8 +1,7 @@
 # Sample docker-compose for the webprogress server.
 #
-# Build the wheel into ./dist before `docker compose build`, e.g.:
-#   uv build
-# (the Dockerfile installs from dist/*.whl).
+# The Dockerfile compiles the Go server itself, so `docker compose build` needs
+# no prior build step.
 #
 # Fill in the WEBPROGRESS_* values below, or drop them in a .env file next to
 # this compose file (compose reads .env automatically for ${...} substitution).

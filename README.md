@@ -19,13 +19,14 @@ simply dropped.
 
 ## How it works
 
-- **Client** (`webprogress.tqdm`) — subclasses `tqdm.auto.tqdm` and overrides
-  `display()`. Each tick builds a `ClientPayload` and POSTs it to
+- **Client** (`webprogress.tqdm`, Python) — subclasses `tqdm.auto.tqdm` and
+  overrides `display()`. Each tick builds a `ClientPayload` and POSTs it to
   `{endpoint}/handler` with a short timeout.
-- **Server** (`webprogress.server`) — a [NiceGUI](https://nicegui.io) app. Users
-  log in via OIDC, mint client tokens from the dashboard, and watch a live
-  progress bar per task. The `/handler` webhook authenticates each payload by its
-  token and routes it to the owning user's dashboard.
+- **Server** (Go) — an OIDC-authenticated web app. Users log in via their OIDC
+  provider, mint client tokens from the dashboard, and watch a live progress bar
+  per task (pushed over a WebSocket). The `/handler` endpoint authenticates each
+  payload by its token and routes it to the owning user's dashboard. The server
+  is wire-compatible with the Python client — the JSON contract is unchanged.
 
 ## Running the server
 
@@ -43,10 +44,11 @@ variables (or a `.env` file):
 | `WEBPROGRESS_SESSION_SECRET` | Secret signing session cookies — set a strong value in production |
 | `WEBPROGRESS_DB_PATH` | SQLite database path (default `webprogress.db`) |
 
-Then start it:
+Then build and start it:
 
 ```bash
-uv run python -c "from webprogress.server import run; run()"
+go build -o webprogress ./cmd/webprogress
+./webprogress
 ```
 
 The app serves on port **8775**. Log in, generate a token, and use it as your
@@ -64,11 +66,12 @@ docker run -p 8775:8775 --env-file .env webprogress
 
 ## Development
 
-Dependencies are managed with [uv](https://docs.astral.sh/uv/) and built with
-`pdm-backend`. The version is derived from git tags, so releases require tagging.
+The server is a Go module (`github.com/ydethe/webprogress`). The published Docker
+image is tagged from git tags, so releases require tagging.
 
 ```bash
-uv sync            # install all dependency groups into .venv
-uv run pytest      # run the test suite
-uv run black .     # format (line length 100)
+go build ./...     # compile all packages
+go test ./...      # run the test suite
+go vet ./...       # static checks
+gofmt -w .         # format
 ```

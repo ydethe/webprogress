@@ -4,35 +4,79 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`webprogress` is an early-stage Python library that lets a developer track a long-running task from a web UI. The public API is a drop-in `tqdm` replacement (`from webprogress import tqdm`) that, in addition to rendering a normal terminal progress bar, POSTs each display update to a running web server which authenticates it, routes it to the sending user, and renders it live.
+`webprogress` lets a developer track a long-running task from a web UI. The **client** is a Python
+drop-in `tqdm` replacement (`from webprogress import tqdm`, maintained on the `master` branch) that,
+in addition to rendering a normal terminal progress bar, POSTs each display update to a running
+**server**. This branch (`go`) is a **Go reimplementation of the server** only; it stays wire-compatible
+with the existing Python client (the JSON contract is unchanged). The server authenticates each update,
+routes it to the sending user, and renders it live in that user's browser dashboard.
+
+The framework-independent specs in `docs/01-specification.md` (what) and `docs/02-architecture.md` (how)
+are the authoritative description of behaviour; the Go code implements them.
 
 ## Architecture
 
-Five modules under `src/webprogress/`, connected by a shared payload model:
+Go module `github.com/ydethe/webprogress`. The entrypoint is `cmd/webprogress/main.go`; the server lives
+under `internal/`, split into packages connected by the shared payload model:
 
-- **`client.py`** — `tqdm` subclasses `tqdm.auto.tqdm` and overrides `display()`. On every display tick it builds a `ClientPayload` from `self.format_dict` and fires `requests.post(f"{endpoint}/handler", ...)` with a short timeout. Any `requests.exceptions.RequestException` is swallowed, so the tracked loop never blocks or fails if the server is down, slow, or rejecting. `key`/`endpoint` come from constructor kwargs or the `WEBPROGRESS_KEY` / `WEBPROGRESS_ENDPOINT` env vars. The `key` is the client token minted in the web UI.
-- **`server.py`** — a [NiceGUI](https://nicegui.io) app with OIDC login. The FastAPI route `@app.post("/handler")` resolves `payload.key` to a user via `storage.resolve_token` (returns **401** if unknown/revoked), stamps `user_src_address`, and emits a `RoutedPayload` (payload + `user_sub`) on a NiceGUI `Event[RoutedPayload]`. The `root` page subscribes and updates **one `ui.linear_progress` per task** (keyed by hostname + description), filtered to the logged-in user. It also renders a token-management panel (generate/list/revoke). `AuthMiddleware` redirects unauthenticated page requests to `/login`; `UNRESTRICTED_ROUTES` (`/login`, `/auth`, `/logout`, `/handler`) bypass it. `run()` validates OIDC config, initialises the DB, registers the provider, and serves on port **8775**.
-- **`config.py`** — `Settings` (Pydantic `BaseSettings`, `WEBPROGRESS_` env prefix, `.env` support) holds OIDC/session/DB configuration. Instantiated at import as the module-level `settings`, which also calls `log_config()` (masking `_SENSITIVE` fields). OIDC fields default to empty so the module imports without a provider; `run()` enforces them via `require_oidc()`.
-- **`storage.py`** — SQLite-backed `users` and `tokens` tables. Users are keyed by OIDC `sub`. Tokens are minted server-side; only their SHA-256 hash is stored, so the plaintext is shown once at creation. A token is bound to the user that created it — this binding is how an incoming payload is routed. Functions: `init_db`, `upsert_user`, `create_token`, `resolve_token`, `list_tokens`, `revoke_token`.
-- **`models.py`** — `ClientPayload` (Pydantic `BaseModel`) is the wire contract shared by both sides; changing a field affects client serialization and server validation together. `key` authenticates/routes the sender and is not a display field. Derived `remaining_time` and `eta` are computed properties, not stored fields.
+- **`internal/models`** — `ClientPayload` is the wire contract shared with the Python client. The JSON
+  field names (`user_hostname`, `progress`, `total`, `colour`, `key`, …) must match the client exactly;
+  changing one is a contract change. Numeric fields are `float64`. `key` authenticates/routes the sender
+  and is not displayed. `TaskKey` (host+description), `Fraction`, `RemainingTime`, and `ETA` are derived
+  helpers, never serialized.
+- **`internal/config`** — `Settings` loaded from `WEBPROGRESS_*` env vars (and an optional `.env` via
+  godotenv). `RequireOIDC()` fails fast if the OIDC settings are missing; `RedirectURI()` derives the
+  `/auth` callback from `BaseURL`; `LogConfig()` logs settings with secrets masked.
+- **`internal/storage`** — SQLite (`modernc.org/sqlite`, pure Go, no cgo) with `users` and `tokens`
+  tables. Users are keyed by OIDC `sub`. Tokens are minted server-side; only their SHA-256 hash and a
+  short prefix are stored, so the plaintext is shown once at creation. A token is bound to the user that
+  created it — that binding is how an incoming payload is routed. Methods: `Open`/`initDB`, `UpsertUser`,
+  `CreateToken`, `ResolveToken`, `ListTokens`, `RevokeToken`.
+- **`internal/bus`** — the in-process pub/sub `Hub`. The ingest handler `Publish`es a `RoutedPayload`
+  (payload + `UserSub`); each open dashboard connection `Subscribe`s. This publish/subscribe step is the
+  core rendering mechanism. `Publish` is non-blocking (drops to a full subscriber) so a slow dashboard
+  never stalls ingest.
+- **`internal/auth`** — OIDC login (`coreos/go-oidc` + `golang.org/x/oauth2`) and the session cookie
+  (`gorilla/sessions`, signed with `SESSION_SECRET`). `Login`/`Callback`/`Logout` run the OIDC round-trip
+  and establish the session; `Middleware` redirects unauthenticated page requests to `/login`, while the
+  `unrestricted` routes (`/login`, `/auth`, `/logout`, `/handler`, `/health`) and `/static/` bypass it.
+- **`internal/server`** — HTTP routing and handlers. `POST /handler` resolves `payload.Key` to a user via
+  `storage.ResolveToken` (**401** if unknown/revoked/empty), stamps `UserSrcAddress` from the request
+  host, and publishes a `RoutedPayload`. `GET /` renders the dashboard; `GET /ws` upgrades to a WebSocket
+  (`gorilla/websocket`), subscribes to the hub, and forwards only updates where `UserSub` matches the
+  viewer (per-user isolation at render). `POST /tokens/create` and `/tokens/revoke` manage tokens; the new
+  token's plaintext is shown once via a session flash. HTML template and JS live under
+  `internal/server/web/` and are embedded with `go:embed`. `Run()` loads config, validates OIDC,
+  initialises the DB, builds the OIDC provider, and serves on port **8775**.
 
-The event-driven `Event`/`emit`/`subscribe` flow between the webhook route and the UI page is the core rendering mechanism — trace `RoutedPayload` through `server.py` before changing progress rendering. Authentication (token → user) happens in the `/handler` route via `storage.resolve_token`; per-user routing happens in the page's `subscribe` callback via the `user_sub` filter.
+Authentication (token → user) happens in `POST /handler` via `storage.ResolveToken`; per-user routing
+happens again in the WebSocket loop via the `UserSub` filter — the two isolation checkpoints described in
+the architecture doc. Trace `RoutedPayload` from `handleIngest` through `bus.Hub` to `handleWS` before
+changing progress rendering.
 
 ## Commands
 
-Package/deps are managed with **uv** (`uv.lock`), built with **pdm-backend**. Version is derived from git tags via SCM, so releases require tagging. `requests` is an explicit runtime dependency.
+Standard Go toolchain (Go 1.26). The server is a pure-Go build (`CGO_ENABLED=0`) thanks to the modernc
+SQLite driver.
 
 ```bash
-uv sync                    # install all dependency groups into .venv
-uv run pytest              # run the full test suite (config in pyproject.toml)
-uv run pytest tests/test_storage.py   # run a single test module
-uv run black .             # format (line length 100)
+go build ./...                       # compile all packages
+go build -o webprogress ./cmd/webprogress   # build the server binary
+go test ./...                        # run the full test suite
+go test ./internal/storage/          # run a single package's tests
+go vet ./...                         # static checks
+gofmt -w .                           # format
 ```
 
-The server (`run()`) needs OIDC configuration supplied via `WEBPROGRESS_*` env vars (or a `.env` file); see the README for the full list. A `Dockerfile` builds a server-only image.
+The server (`Run()`) needs OIDC configuration via `WEBPROGRESS_*` env vars (or a `.env` file); see the
+README and `sample.env` for the full list. `./webprogress --healthcheck` probes the local `/health`
+endpoint and exits 0/1 (used by the container healthcheck). A `Dockerfile` builds a distroless
+server-only image.
 
-Notes on the test config (`[tool.pytest.ini_options]`):
+Notes on the layout:
 
-- `asyncio_mode = "auto"` and `--doctest-modules` are on: docstring examples in `src/` are executed as tests, and async tests need no explicit marker. Note that importing a module runs its top-level code — `config.py` builds `settings` and calls `log_config()` at import.
-- pytest writes an HTML report + JUnit XML under `htmldoc/` and collects coverage against the `webprogress` package (config in `tests/coverage.conf`).
-- `test_client`/`test_server` are manual/integration checks expecting a live server at `http://127.0.0.1:8775`, not isolated unit tests. Run the server in one terminal and the client test in another. `test_storage` is a self-contained unit test.
+- `cmd/webprogress/main.go` is the only entrypoint; everything else is under `internal/`.
+- Web assets (`internal/server/web/templates/dashboard.html`, `internal/server/web/static/app.js`) are
+  embedded via `go:embed`, so the binary is self-contained. The dashboard uses Tailwind via CDN.
+- The wire contract (`internal/models`) is the compatibility boundary with the Python client on `master`:
+  a field change must be mirrored there too.
