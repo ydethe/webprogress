@@ -27,13 +27,17 @@ under `internal/`, split into packages connected by the shared payload model:
   **client-assigned per-run identity** (one per tqdm run): `InstanceKey` returns it, falling back to
   `TaskKey` for a pre-v3 client, and that key is the dashboard card's identity so a restart (new uuid)
   opens a fresh card instead of reviving the old one.
+  `Library`/`LibraryVersion` identify the reporting client library (shown on the dashboard as the
+  `LibraryLabel` chip "name@version" and filterable); `Criticity` (`trivial`/`standard`/`critical`,
+  empty → `standard` via `EffectiveCriticity`) is the task's importance, shown as a colour-coded
+  filterable chip and gating notifications (`NotifyOnComplete`/`NotifyOnStall`/`NotifyOnDead`).
   `ScriptName` (script with an "(unscripted)" fallback), `Fraction`,
   `RemainingTime`, and `ETA` are derived helpers, never serialized. Liveness carries no wire field:
   the server judges it from the task's update cadence (see `cadenceTracker` below), deriving the
   `stall`/`dead` silence thresholds; `Status(idle, stall, dead)` yields the task's `TaskStatus`
   (`running`, `finished`, `stalled`, `dead`) the dashboard shows and filters on, with `StallMultiple`/
-  `DeadMultiple` (2 and 10) the cadence multiples. `ProtocolVersion` (currently 3; v3 added the
-  client-assigned `uuid`) is the wire-protocol
+  `DeadMultiple` (2 and 10) the cadence multiples. `ProtocolVersion` (currently 4; v4 added
+  `library`/`library_version` and `criticity`, v3 the client-assigned `uuid`) is the wire-protocol
   version and `ServerInfo` is the handshake response the server advertises from `GET /version` so clients
   can adapt the protocol before reporting; bump `ProtocolVersion` on any contract change clients must adapt
   to.
@@ -48,7 +52,9 @@ under `internal/`, split into packages connected by the shared payload model:
 - **`internal/notify`** — out-of-band task alerts, independent of the Python wire contract. `Config`
   describes one user's channel (`pushover`, `slack`, `webhook`, or empty/off) plus a `StallSeconds`
   timeout; `Send` delivers a `Message` over it. The `Dispatcher` subscribes to the `bus.Hub` and fires a
-  one-shot notification when a task completes (fraction ≥ 1) or stalls (no update within `StallSeconds`);
+  one-shot notification when a task completes (fraction ≥ 1), dies (silent past its cadence-derived dead
+  threshold), or stalls (no update within `StallSeconds`) — each gated by the task's `Criticity`
+  (`trivial` fires nothing, `standard` only on death, `critical` on all three);
   all task bookkeeping runs on its single `Run` goroutine, so only the outbound HTTP send is off-loaded.
   A `Resolver` func supplies each user's effective `Config`. This package imports neither `config` nor
   `storage`, so both depend on it without a cycle.

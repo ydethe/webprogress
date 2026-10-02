@@ -1,10 +1,12 @@
 // Dashboard live client. Opens a WebSocket to the server and upserts one row per
 // task key (script:host:description) into a flat table with Started, Host, Script,
-// Task, Tags and Status columns; rows are sorted by start time, most recent first,
-// and the Tags cell shows each tag as a clickable chip. The Status cell carries a
-// compact progress bar that stays visible while the row is folded; clicking a row
-// unfolds a details panel underneath it with a full-width bar plus ETA, rate, ….
-// Each task carries a
+// Task, Criticity, Tags and Status columns; rows are sorted by start time, most
+// recent first, and the Tags cell shows each tag as a clickable chip. The Task cell
+// also carries the reporting library as a "name@version" chip. The Criticity cell
+// shows a colour-coded chip (trivial / standard / critical) that is also filterable.
+// The Status cell carries a compact progress bar that stays visible while the row is
+// folded; clicking a row unfolds a details panel underneath it with a full-width bar
+// plus ETA, rate, …. Each task carries a
 // status badge — running, finished, stalled, or dead — derived from its progress
 // and how long it has gone silent relative to how often it normally reports; a
 // status filter (running only by default) decides which rows are shown. The server
@@ -72,6 +74,43 @@
   const BADGE_BASE =
     "status shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium tabular-nums ";
 
+  // The three criticity levels, mirroring models.Criticity on the server. Each
+  // maps to the colour-coded chip classes and label shown in a row's Criticity
+  // cell. An empty/unknown value is treated as the default "standard".
+  const CRITICITY_STYLES = {
+    critical: ["bg-rose-500/15 text-rose-300 ring-1 ring-inset ring-rose-500/30", "critical"],
+    standard: ["bg-indigo-500/15 text-indigo-300 ring-1 ring-inset ring-indigo-500/30", "standard"],
+    trivial: ["bg-slate-600/20 text-slate-400 ring-1 ring-inset ring-slate-600/40", "trivial"],
+  };
+  const CRIT_BASE =
+    "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ";
+
+  // Normalise a criticity value to one of the three known levels, defaulting an
+  // empty/unknown value to "standard" (matching the server).
+  function normCriticity(c) {
+    return CRITICITY_STYLES[c] ? c : "standard";
+  }
+
+  // Render a row's criticity chip.
+  function renderCriticity(card, criticity) {
+    const c = normCriticity(criticity);
+    const [cls, label] = CRITICITY_STYLES[c];
+    card.critEl.className = CRIT_BASE + cls;
+    card.critEl.textContent = label;
+  }
+
+  // Render the reporting library as a "name@version" chip in the Task cell; a
+  // task with no library shows nothing.
+  function renderLibrary(card, label) {
+    card.libEl.innerHTML = "";
+    if (!label) return;
+    const chip = document.createElement("span");
+    chip.className =
+      "inline-flex items-center rounded-md border border-slate-700 bg-slate-800/60 px-1.5 py-0.5 font-mono text-[10px] text-slate-400";
+    chip.textContent = label;
+    card.libEl.appendChild(chip);
+  }
+
   // Derive a row's current status from its latest frame and how long it has been
   // silent. A finished task (value ≥ 1) stays finished; a task that has gone quiet
   // for longer than the server's stall/dead thresholds (derived from how often it
@@ -108,6 +147,8 @@
     ["rate", "Rate"],
     ["login", "User"],
     ["src", "Source"],
+    ["library", "Library"],
+    ["criticity", "Criticity"],
   ];
 
   const CHEVRON =
@@ -125,7 +166,11 @@
       "</td>" +
       '<td class="host py-2.5 px-2 text-slate-300"></td>' +
       '<td class="script py-2.5 px-2 text-slate-400"></td>' +
-      '<td class="name py-2.5 px-2 font-medium text-slate-100"></td>' +
+      '<td class="py-2.5 px-2">' +
+      '  <div class="name font-medium text-slate-100"></div>' +
+      '  <div class="lib mt-0.5 empty:hidden"></div>' +
+      "</td>" +
+      '<td class="py-2.5 px-2"><span class="crit"></span></td>' +
       '<td class="py-2.5 px-2"><div class="tags flex flex-wrap gap-1"></div></td>' +
       '<td class="py-2.5 pl-2 pr-4">' +
       '  <span class="flex items-center gap-2">' +
@@ -140,7 +185,7 @@
     const detail = document.createElement("tr");
     detail.className = "detail hidden bg-slate-900/30";
     const td = document.createElement("td");
-    td.colSpan = 6;
+    td.colSpan = 7;
     td.className = "px-4 pb-4 pt-1";
     td.innerHTML =
       '<div class="h-2.5 w-full overflow-hidden rounded-full bg-slate-800">' +
@@ -169,6 +214,8 @@
       hostEl: row.querySelector(".host"),
       scriptEl: row.querySelector(".script"),
       name: row.querySelector(".name"),
+      libEl: row.querySelector(".lib"),
+      critEl: row.querySelector(".crit"),
       bar: td.querySelector(".bar"),
       minibar: row.querySelector(".minibar"),
       pct: row.querySelector(".pct"),
@@ -182,7 +229,7 @@
       lastSeen: 0,
       stallSeconds: 0,
       deadSeconds: 0,
-      meta: { host: "", login: "", script: "", description: "", tags: [] },
+      meta: { host: "", login: "", script: "", description: "", library: "", criticity: "standard", tags: [] },
     };
 
     row.addEventListener("click", () => toggle(card));
@@ -195,6 +242,29 @@
     card.chev.classList.toggle("rotate-90", card.open);
   }
 
+  // Give each distinct tag its own stable colour: hash the (lower-cased) tag to a
+  // hue so the same tag is always the same colour, across chips and the cloud.
+  function tagColour(tag) {
+    let h = 0;
+    const s = String(tag).toLowerCase();
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    const hue = h % 360;
+    return {
+      bg: "hsl(" + hue + " 65% 50% / 0.18)",
+      fg: "hsl(" + hue + " 80% 78%)",
+      border: "hsl(" + hue + " 65% 55% / 0.4)",
+    };
+  }
+
+  // Apply a tag's colour to a chip element as inline styles (so each tag keeps a
+  // distinct colour regardless of the Tailwind classes already on it).
+  function paintChip(chip, tag) {
+    const c = tagColour(tag);
+    chip.style.backgroundColor = c.bg;
+    chip.style.color = c.fg;
+    chip.style.borderColor = c.border;
+  }
+
   // Render a task's tags as chips in its Tags column. Clicking a chip adds it to
   // the Tags filter.
   function renderTags(card, tags) {
@@ -204,8 +274,9 @@
       const chip = document.createElement("button");
       chip.type = "button";
       chip.className =
-        "chip inline-flex items-center rounded-full bg-slate-800 px-2 py-0.5 text-[11px] text-slate-300 transition hover:bg-indigo-500/20 hover:text-indigo-200";
+        "chip inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] transition hover:brightness-125";
       chip.textContent = tag;
+      paintChip(chip, tag);
       chip.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation(); // don't fold the row
@@ -215,10 +286,23 @@
     }
   }
 
+  // Build the reporting library's "name@version" label from its parts; the name
+  // alone when no version is known, empty when no library was sent.
+  function libraryLabel(msg) {
+    const name = msg.library || "";
+    if (!name) return "";
+    return msg.library_version ? name + "@" + msg.library_version : name;
+  }
+
   function fill(card, msg) {
     card.name.textContent = msg.label || msg.description || "—";
     card.hostEl.textContent = msg.host || "—";
     card.scriptEl.textContent = msg.script || "(unscripted)";
+
+    const libLabel = libraryLabel(msg);
+    renderLibrary(card, libLabel);
+    const criticity = normCriticity(msg.criticity);
+    renderCriticity(card, criticity);
 
     const pct = Math.max(0, Math.min(1, msg.value)) * 100;
     const colour = cssColour(msg.colour);
@@ -255,6 +339,8 @@
       typeof msg.rate === "number" && msg.rate > 0 ? fmtNum(msg.rate) + " " + unit + "/s" : "—";
     f.login.textContent = msg.login || "—";
     f.src.textContent = msg.src_address || "—";
+    f.library.textContent = libLabel || "—";
+    f.criticity.textContent = criticity;
 
     renderTags(card, msg.tags);
     card.meta = {
@@ -262,9 +348,20 @@
       login: msg.login || "",
       script: msg.script || "(unscripted)",
       description: msg.description || "",
+      library: libLabel,
+      criticity: criticity,
       tags: Array.isArray(msg.tags) ? msg.tags.filter(Boolean) : [],
     };
     rememberTags(card.meta.tags);
+    rememberFacets(card.meta);
+  }
+
+  // Record a task's field values so each filter's autocomplete can offer them.
+  function rememberFacets(meta) {
+    if (meta.host) seenHosts.add(meta.host);
+    if (meta.script) seenScripts.add(meta.script);
+    if (meta.description) seenTasks.add(meta.description);
+    if (meta.library) seenLibraries.add(meta.library);
   }
 
   // Re-append every row/detail pair ordered by start time, most recent first.
@@ -322,14 +419,25 @@
     host: document.getElementById("f-host"),
     script: document.getElementById("f-script"),
     task: document.getElementById("f-task"),
+    library: document.getElementById("f-library"),
     tags: document.getElementById("f-tags"),
   };
   const statusBoxes = Array.from(
     document.querySelectorAll('#f-status input[type="checkbox"]')
   );
+  const criticityBoxes = Array.from(
+    document.querySelectorAll('#f-criticity input[type="checkbox"]')
+  );
   const filterActive = document.getElementById("filter-active");
   const tagCloud = document.getElementById("tag-cloud");
   const seenTags = new Set(); // every tag ever seen, for the quick-filter cloud
+  // Every distinct value seen per field, feeding the filter autocomplete menus.
+  const seenHosts = new Set();
+  const seenScripts = new Set();
+  const seenTasks = new Set();
+  const seenLibraries = new Set();
+
+  const sortedSet = (set) => Array.from(set).sort();
 
   function parseTagFilter(raw) {
     return raw
@@ -344,19 +452,32 @@
     return set;
   }
 
+  function selectedCriticities() {
+    const set = new Set();
+    for (const box of criticityBoxes) if (box.checked) set.add(box.value);
+    return set;
+  }
+
   function currentFilter() {
     return {
       host: filterEls.host.value.trim().toLowerCase(),
       script: filterEls.script.value.trim().toLowerCase(),
       task: filterEls.task.value.trim().toLowerCase(),
+      library: filterEls.library.value.trim().toLowerCase(),
       tags: parseTagFilter(filterEls.tags.value),
       statuses: selectedStatuses(),
+      criticities: selectedCriticities(),
     };
   }
 
   // The status filter is "active" whenever it is not the default (running only).
   function statusFilterActive(statuses) {
     return !(statuses.size === 1 && statuses.has("running"));
+  }
+
+  // The criticity filter is "active" whenever it is not the default (all three).
+  function criticityFilterActive(criticities) {
+    return criticities.size !== criticityBoxes.length;
   }
 
   // A row matches when every set text filter is a (case-insensitive) substring of
@@ -367,12 +488,16 @@
     if (f.host && !meta.host.toLowerCase().includes(f.host)) return false;
     if (f.script && !meta.script.toLowerCase().includes(f.script)) return false;
     if (f.task && !meta.description.toLowerCase().includes(f.task)) return false;
+    if (f.library && !meta.library.toLowerCase().includes(f.library)) return false;
     if (f.tags.length) {
       const have = meta.tags.map((t) => t.toLowerCase());
       for (const want of f.tags)
         if (!have.some((t) => t.includes(want))) return false;
     }
-    if (!f.statuses.has(card.status)) return false;
+    // No status box selected means "no status filter" — show every status.
+    if (f.statuses.size && !f.statuses.has(card.status)) return false;
+    // Likewise for criticity: no box selected shows every criticity.
+    if (f.criticities.size && !f.criticities.has(meta.criticity)) return false;
     return true;
   }
 
@@ -381,7 +506,9 @@
   function applyFilter(card) {
     const f = currentFilter();
     const filtering =
-      !!(f.host || f.script || f.task || f.tags.length) || statusFilterActive(f.statuses);
+      !!(f.host || f.script || f.task || f.library || f.tags.length) ||
+      statusFilterActive(f.statuses) ||
+      criticityFilterActive(f.criticities);
     filterActive.classList.toggle("hidden", !filtering);
     const update = (c) => setVisible(c, cardMatches(c, f));
     if (card) {
@@ -418,8 +545,9 @@
       const chip = document.createElement("button");
       chip.type = "button";
       chip.className =
-        "inline-flex items-center rounded-full border border-slate-700 bg-slate-800/60 px-2 py-0.5 text-[11px] text-slate-300 transition hover:bg-indigo-500/20 hover:text-indigo-200";
+        "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] transition hover:brightness-125";
       chip.textContent = tag;
+      paintChip(chip, tag);
       chip.addEventListener("click", () => addTagToFilter(tag));
       tagCloud.appendChild(chip);
     }
@@ -428,9 +556,113 @@
   for (const el of Object.values(filterEls))
     el.addEventListener("input", () => applyFilter());
   for (const box of statusBoxes) box.addEventListener("change", () => applyFilter());
+  for (const box of criticityBoxes) box.addEventListener("change", () => applyFilter());
+
+  // ---- autocomplete ----------------------------------------------------------
+  // Give a filter input a dropdown of its known values, filtered by what's typed.
+  // Single-value fields (host/script/task) match and replace the whole value; the
+  // comma-separated tags field matches and replaces only the token being typed,
+  // leaving a trailing ", " so the next tag can be added straight away.
+  function attachAutocomplete(input, getItems, multi) {
+    const menu = document.createElement("ul");
+    menu.className =
+      "absolute left-0 right-0 z-20 mt-1 hidden max-h-56 overflow-auto rounded-lg " +
+      "border border-slate-700 bg-slate-900 py-1 text-sm shadow-lg";
+    input.insertAdjacentElement("afterend", menu);
+    let items = [];
+    let active = -1;
+
+    const currentToken = () =>
+      multi ? input.value.split(",").pop().trim() : input.value;
+
+    function setToken(val) {
+      if (!multi) {
+        input.value = val;
+        return;
+      }
+      const kept = input.value.split(",").slice(0, -1).map((p) => p.trim());
+      input.value = kept.concat(val).filter(Boolean).join(", ") + ", ";
+    }
+
+    function hide() {
+      menu.classList.add("hidden");
+      active = -1;
+    }
+
+    function choose(i) {
+      if (i < 0 || i >= items.length) return;
+      setToken(items[i]);
+      hide();
+      applyFilter();
+      input.focus();
+    }
+
+    function render() {
+      const token = currentToken().toLowerCase();
+      const chosen = multi ? parseTagFilter(input.value) : [];
+      items = getItems()
+        .filter((v) => v.toLowerCase().includes(token))
+        .filter((v) => !chosen.includes(v.toLowerCase()))
+        .slice(0, 50);
+      if (active >= items.length) active = items.length - 1;
+      menu.innerHTML = "";
+      if (items.length === 0) {
+        hide();
+        return;
+      }
+      items.forEach((v, i) => {
+        const li = document.createElement("li");
+        li.textContent = v;
+        li.className =
+          "cursor-pointer px-3 py-1.5 text-slate-200 hover:bg-slate-800" +
+          (i === active ? " bg-slate-800" : "");
+        li.addEventListener("mousedown", (e) => {
+          e.preventDefault(); // keep focus so blur doesn't close before the click
+          choose(i);
+        });
+        menu.appendChild(li);
+      });
+      menu.classList.remove("hidden");
+    }
+
+    input.addEventListener("input", () => {
+      active = -1;
+      render();
+    });
+    input.addEventListener("focus", () => {
+      active = -1;
+      render();
+    });
+    input.addEventListener("blur", () => setTimeout(hide, 120));
+    input.addEventListener("keydown", (e) => {
+      if (menu.classList.contains("hidden")) return;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        active = Math.min(active + 1, items.length - 1);
+        render();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        active = Math.max(active - 1, 0);
+        render();
+      } else if (e.key === "Enter" && active >= 0) {
+        e.preventDefault();
+        choose(active);
+      } else if (e.key === "Escape") {
+        hide();
+      }
+    });
+  }
+
+  attachAutocomplete(filterEls.host, () => sortedSet(seenHosts), false);
+  attachAutocomplete(filterEls.script, () => sortedSet(seenScripts), false);
+  attachAutocomplete(filterEls.task, () => sortedSet(seenTasks), false);
+  attachAutocomplete(filterEls.library, () => sortedSet(seenLibraries), false);
+  attachAutocomplete(filterEls.tags, () => sortedSet(seenTags), true);
+
   document.getElementById("filter-clear").addEventListener("click", () => {
     for (const el of Object.values(filterEls)) el.value = "";
     for (const box of statusBoxes) box.checked = box.value === "running";
+    for (const box of criticityBoxes) box.checked = true;
     applyFilter();
   });
 

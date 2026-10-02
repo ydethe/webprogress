@@ -16,11 +16,14 @@ import (
 // "persisted settings if present, else env defaults".
 type Resolver func(ctx context.Context, userSub string) Config
 
-// Dispatcher watches the bus of routed progress updates and emits a one-shot
-// notification per task when it completes (fraction >= 1) or when it has gone
-// silent for longer than the user's stall timeout. All task bookkeeping runs on
-// the single Run goroutine, so the state map needs no locking; only the outbound
-// HTTP send is off-loaded to a short-lived goroutine via the sink.
+// Dispatcher watches the bus of routed progress updates and emits one-shot
+// notifications per task — on completion (fraction >= 1), on a stall (silent past
+// the user's stall timeout), and on death (silent past the task's cadence-derived
+// dead threshold). Which of these actually fire is gated by the task's criticity
+// (see models.Criticity): TRIVIAL fires nothing, STANDARD fires only on death,
+// and CRITICAL fires on all three. All task bookkeeping runs on the single Run
+// goroutine, so the state map needs no locking; only the outbound HTTP send is
+// off-loaded to a short-lived goroutine via the sink.
 type Dispatcher struct {
 	resolve      Resolver
 	client       *http.Client
@@ -34,10 +37,12 @@ type Dispatcher struct {
 }
 
 type taskState struct {
-	payload  models.ClientPayload
-	lastSeen time.Time
-	done     bool // completion already notified
-	stalled  bool // stall already notified (reset by a fresh update)
+	payload     models.ClientPayload
+	lastSeen    time.Time
+	deadSeconds float64 // cadence-derived dead threshold from the latest update (0 = unknown)
+	done        bool    // completion already notified
+	stalled     bool    // stall already notified (reset by a fresh update)
+	dead        bool    // dead already notified (reset by a fresh update)
 }
 
 // NewDispatcher builds a Dispatcher using resolve to look up each user's config.
@@ -81,8 +86,9 @@ func (d *Dispatcher) Run(ctx context.Context, hub *bus.Hub) {
 // same (script, host, description) are tracked independently.
 func taskID(userSub, taskKey string) string { return userSub + "\x00" + taskKey }
 
-// observe records an update and fires the completion notification the first
-// time a task reaches 100%.
+// observe records an update and, for a CRITICAL task, fires the completion
+// notification the first time it reaches 100%. A fresh update also clears any
+// prior stall/dead so those can fire again if the task goes silent once more.
 func (d *Dispatcher) observe(ctx context.Context, routed bus.RoutedPayload) {
 	id := taskID(routed.UserSub, routed.Payload.TaskKey())
 	st := d.tasks[id]
@@ -92,20 +98,28 @@ func (d *Dispatcher) observe(ctx context.Context, routed bus.RoutedPayload) {
 	}
 	st.payload = routed.Payload
 	st.lastSeen = d.now()
+	st.deadSeconds = routed.DeadSeconds
 	st.stalled = false // a fresh update clears any prior stall
+	st.dead = false    // and any prior death — the task is reporting again
 
 	if routed.Payload.Fraction() >= 1 {
 		if !st.done {
 			st.done = true
-			d.sink(routed.UserSub, d.resolve(ctx, routed.UserSub), completionMessage(routed.Payload))
+			if routed.Payload.EffectiveCriticity().NotifyOnComplete() {
+				d.sink(routed.UserSub, d.resolve(ctx, routed.UserSub), completionMessage(routed.Payload))
+			}
 		}
 		return
 	}
 	st.done = false
 }
 
-// scanStalled fires a one-shot stall notification for any live task whose last
-// update is older than its owner's stall timeout, and prunes long-idle tasks.
+// scanStalled sweeps live tasks and fires their one-shot silence notifications,
+// each gated by the task's criticity: a dead notification (STANDARD and CRITICAL)
+// once idle passes the task's cadence-derived dead threshold, and a stall
+// notification (CRITICAL only) once idle passes the owner's stall timeout. Tasks
+// that have gone terminal (completed or dead) are pruned after they have lingered
+// past the retain window.
 func (d *Dispatcher) scanStalled(ctx context.Context) {
 	now := d.now()
 	cache := map[string]Config{}
@@ -122,14 +136,23 @@ func (d *Dispatcher) scanStalled(ctx context.Context) {
 		sub, _, _ := splitTaskID(id)
 		idle := now.Sub(st.lastSeen)
 
-		if st.done || st.stalled {
+		if st.done || st.dead {
 			if idle > d.retain {
 				delete(d.tasks, id)
 			}
 			continue
 		}
+		crit := st.payload.EffectiveCriticity()
 		cfg := resolve(sub)
-		if cfg.StallSeconds > 0 && idle >= time.Duration(cfg.StallSeconds)*time.Second {
+		// Dead: presumed gone. Uses the task's cadence-derived threshold so it
+		// mirrors the dashboard's own aging; fires for STANDARD and CRITICAL.
+		if st.deadSeconds > 0 && idle >= time.Duration(st.deadSeconds*float64(time.Second)) && crit.NotifyOnDead() {
+			st.dead = true
+			d.sink(sub, cfg, deadMessage(st.payload, idle))
+			continue
+		}
+		// Stall: recoverable silence past the user's own timeout; CRITICAL only.
+		if !st.stalled && cfg.StallSeconds > 0 && idle >= time.Duration(cfg.StallSeconds)*time.Second && crit.NotifyOnStall() {
 			st.stalled = true
 			d.sink(sub, cfg, stallMessage(st.payload, idle))
 		}
@@ -171,6 +194,8 @@ func taskInfo(p models.ClientPayload) TaskInfo {
 		Progress:    p.Progress,
 		Total:       p.Total,
 		Fraction:    p.Fraction(),
+		Library:     p.LibraryLabel(),
+		Criticity:   string(p.EffectiveCriticity()),
 	}
 }
 
@@ -189,6 +214,17 @@ func stallMessage(p models.ClientPayload, idle time.Duration) Message {
 		Event: "stalled",
 		Title: "⚠️ " + taskLabel(p) + " stalled",
 		Body: fmt.Sprintf("%s on %s: no update for %s, %.0f%% done (%s/%s %s)",
+			p.ScriptName(), hostLabel(p), fmtDuration(idle),
+			p.Fraction()*100, fmtCount(p.Progress), fmtCount(p.Total), unitOf(p)),
+		Task: taskInfo(p),
+	}
+}
+
+func deadMessage(p models.ClientPayload, idle time.Duration) Message {
+	return Message{
+		Event: "dead",
+		Title: "💀 " + taskLabel(p) + " dead",
+		Body: fmt.Sprintf("%s on %s: no update for %s, presumed dead at %.0f%% (%s/%s %s)",
 			p.ScriptName(), hostLabel(p), fmtDuration(idle),
 			p.Fraction()*100, fmtCount(p.Progress), fmtCount(p.Total), unitOf(p)),
 		Task: taskInfo(p),

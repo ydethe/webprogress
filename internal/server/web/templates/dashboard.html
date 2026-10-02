@@ -140,25 +140,53 @@
         <button id="filter-clear" type="button"
                 class="ml-auto rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-400 transition hover:bg-slate-800">Clear</button>
       </div>
-      <div class="mt-3 grid gap-3 sm:grid-cols-4">
+      <div class="mt-3 grid gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <label class="block text-xs font-medium text-slate-400">Host
-          <input id="f-host" type="search" placeholder="any host"
-                 class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none">
+          <div class="relative mt-1">
+            <input id="f-host" type="search" placeholder="any host" autocomplete="off"
+                   class="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none">
+          </div>
         </label>
         <label class="block text-xs font-medium text-slate-400">Script
-          <input id="f-script" type="search" placeholder="any script"
-                 class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none">
+          <div class="relative mt-1">
+            <input id="f-script" type="search" placeholder="any script" autocomplete="off"
+                   class="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none">
+          </div>
         </label>
         <label class="block text-xs font-medium text-slate-400">Task
-          <input id="f-task" type="search" placeholder="any task"
-                 class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none">
+          <div class="relative mt-1">
+            <input id="f-task" type="search" placeholder="any task" autocomplete="off"
+                   class="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none">
+          </div>
+        </label>
+        <label class="block text-xs font-medium text-slate-400">Library
+          <div class="relative mt-1">
+            <input id="f-library" type="search" placeholder="any library" autocomplete="off"
+                   class="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none">
+          </div>
         </label>
         <label class="block text-xs font-medium text-slate-400">Tags
-          <input id="f-tags" type="search" placeholder="comma separated"
-                 class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none">
+          <div class="relative mt-1">
+            <input id="f-tags" type="search" placeholder="comma separated" autocomplete="off"
+                   class="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none">
+          </div>
         </label>
       </div>
       <div id="tag-cloud" class="mt-3 hidden flex-wrap gap-1.5"></div>
+      <div class="mt-3">
+        <span class="text-xs font-medium text-slate-400">Criticity</span>
+        <div id="f-criticity" class="mt-1 flex flex-wrap gap-2">
+          <label class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1 text-xs text-slate-300 transition hover:bg-slate-800 has-[:checked]:border-indigo-500/60 has-[:checked]:bg-indigo-500/10">
+            <input type="checkbox" value="critical" checked class="accent-indigo-500"> Critical
+          </label>
+          <label class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1 text-xs text-slate-300 transition hover:bg-slate-800 has-[:checked]:border-indigo-500/60 has-[:checked]:bg-indigo-500/10">
+            <input type="checkbox" value="standard" checked class="accent-indigo-500"> Standard
+          </label>
+          <label class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1 text-xs text-slate-300 transition hover:bg-slate-800 has-[:checked]:border-indigo-500/60 has-[:checked]:bg-indigo-500/10">
+            <input type="checkbox" value="trivial" checked class="accent-indigo-500"> Trivial
+          </label>
+        </div>
+      </div>
       <div class="mt-3">
         <span class="text-xs font-medium text-slate-400">Status</span>
         <div id="f-status" class="mt-1 flex flex-wrap gap-2">
@@ -210,6 +238,7 @@
                 <th class="py-2.5 px-2 font-medium">Host</th>
                 <th class="py-2.5 px-2 font-medium">Script</th>
                 <th class="py-2.5 px-2 font-medium">Task</th>
+                <th class="py-2.5 px-2 font-medium">Criticity</th>
                 <th class="py-2.5 px-2 font-medium">Tags</th>
                 <th class="py-2.5 pl-2 pr-4 font-medium">Status</th>
               </tr>

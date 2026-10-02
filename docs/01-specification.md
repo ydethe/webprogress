@@ -63,6 +63,9 @@ categories — **display** data (shown to the user), **routing/metadata**, and t
 | `colour` | Preferred colour for the progress indicator. |
 | `uuid` | Identity of this particular **run** of the task, assigned by the reporter (one value per run — see §6.3). The server draws one dashboard card per uuid, so a restarted task, sending a new uuid, opens a new card instead of reviving the previous run's. Added in protocol version 3; a pre-v3 reporter omits the field and the server falls back to the (`script`, `user_hostname`, `description`) triple, which cannot tell successive runs apart. |
 | `tags` | Optional list of free-form labels attached to the task (e.g. `["gpu", "nightly"]`). Shown as chips on the dashboard and available as a filter dimension; they are **not** part of a task's identity (see §6.3). Added in protocol version 2; a pre-v2 reporter omits the field. |
+| `library` | Name of the client library that is reporting this task (e.g. `"webprogress"`). Combined with `library_version` it is shown on the dashboard as the chip `library@library_version` (e.g. `webprogress@1.2.3`) and is available as a filter dimension (see §6.3); it is **not** part of a task's identity. Added in protocol version 4; an earlier reporter omits the field. |
+| `library_version` | Version of the reporting client library (e.g. `"1.2.3"`), shown together with `library`. Added in protocol version 4; an earlier reporter omits the field. |
+| `criticity` | Importance of the task, chosen by the reporter, that decides which out-of-band notifications fire for it (see §6.7). One of `trivial`, `standard`, or `critical`; an absent or unrecognised value is treated as `standard` (the default). Shown on the dashboard as a colour-coded chip and available as a filter dimension (see §6.3); it is **not** part of a task's identity. Added in protocol version 4; an earlier reporter omits the field, falling back to `standard`. |
 
 The reporter advertises **nothing about liveness**: whether a task has stalled or
 died is judged entirely by the server from how often the task reports (see §6.3),
@@ -113,14 +116,18 @@ stamps it on receipt, and `key` carries the credential token.
   "colour": "#3b82f6",
   "key": "wp_8f3a1c9e4b7d2056",
   "uuid": "f0e1d2c3-b4a5-6789-0123-456789abcdef",
-  "tags": ["gpu", "nightly"]
+  "tags": ["gpu", "nightly"],
+  "library": "webprogress",
+  "library_version": "1.2.3",
+  "criticity": "critical"
 }
 ```
 
 From this message the server derives `remaining_time = (5000 − 1280) / 30.1 ≈
 123.6` seconds and an `eta` of the receipt time plus that interval; neither is
-carried on the wire (see §3.4). A pre-v2 reporter sends the same message without
-the `tags` field.
+carried on the wire (see §3.4). An older reporter omits the fields its protocol
+predates — a pre-v2 reporter sends no `tags`, and a pre-v4 reporter no `library`,
+`library_version`, or `criticity` (which then defaults to `standard`).
 
 ---
 
@@ -234,13 +241,17 @@ any resulting update is simply rejected or undeliverable.
   a task *running* until its cadence is known. A very fast cadence is floored so ordinary network
   jitter does not flap a task between *running* and *stalled*.
 - A task's `tags` are shown as **chips** on its indicator. Clicking a chip adds that tag to the
-  tag filter.
+  tag filter. The reporting `library` is shown as its own `library@library_version` chip, and the
+  task's `criticity` as a **colour-coded chip** (one colour per level: trivial, standard, critical).
 - The dashboard offers a **filter** over four text dimensions — **host**, **script**, **task**
-  (description), and **tags** — plus a **status** filter, applied together (a task must match every
-  set dimension). Host, script, and task match as case-insensitive substrings; the tag filter
-  requires every listed tag to be present on the task; the status filter keeps only tasks whose
-  status is selected. By **default only *running* tasks are shown**; the other statuses are revealed
-  by selecting them. Groups with no matching task are hidden while a filter is active.
+  (description), and **library** — plus a **tags** filter, a **criticity** filter, and a **status**
+  filter, applied together (a task must match every set dimension). Host, script, task, and library
+  match as case-insensitive substrings (the library matches against the `library@library_version`
+  label, so either the name or the version narrows it); the tag filter requires every listed tag to
+  be present on the task; the criticity filter keeps only tasks whose criticity level is selected
+  (**all three shown by default**); the status filter keeps only tasks whose status is selected
+  (**only *running* shown by default**; the other statuses are revealed by selecting them). Groups
+  with no matching task are hidden while a filter is active.
 - A user sees **only their own tasks**: updates routed to other users never appear.
 
 ### 6.4 Token management
@@ -270,10 +281,34 @@ Within the web UI, a signed-in user can:
   handshake still works against a compatible server, and a client that queries it never blocks the
   tracked task on the result.
 - The **protocol version** is incremented whenever the shared contract (§3) changes in a way that
-  clients must adapt to. The current protocol version is **3**, which added the reporter-assigned
-  per-run `uuid`; version 2 added the optional `tags` field, and version 1 covered the addition of the
+  clients must adapt to. The current protocol version is **4**, which added the reporting `library`
+  and `library_version` and the task `criticity`; version 3 added the reporter-assigned per-run
+  `uuid`; version 2 added the optional `tags` field, and version 1 covered the addition of the
   `script` field. (Liveness is judged by the server from the update cadence, so it needs no wire field
   and no version bump — see §6.3.)
+
+### 6.7 Out-of-band notifications
+
+Independently of the live dashboard, the server may deliver a **one-shot notification** to a user's
+configured channel when one of their tasks reaches a notable moment. Three moments are recognised:
+
+- **complete** — the task reached 100%;
+- **dead** — the task went silent past its **dead** threshold (ten update cadences, see §6.3) and is
+  presumed gone;
+- **stall** — the task went silent past a shorter, user-configured timeout but may still recover.
+
+Which of these actually fire for a task is gated by its **`criticity`** (§3.1):
+
+| Criticity | Fires on |
+| --- | --- |
+| `trivial` | nothing — the task is never announced. |
+| `standard` (default) | **dead** only — the user is told only when the task is presumed gone. |
+| `critical` | **stall**, **dead**, and **complete** — every moment is announced. |
+
+Each moment fires **at most once** per occurrence; a fresh update from a task that had gone silent
+re-arms its stall/dead notifications. Delivery is best-effort and never blocks ingestion or the
+dashboard. The channel itself (e.g. push, chat webhook, or a custom HTTP endpoint) and the stall
+timeout are part of a user's configuration, out of scope of this contract.
 
 ---
 

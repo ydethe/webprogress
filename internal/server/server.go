@@ -208,6 +208,12 @@ type wsMessage struct {
 	Remaining   float64  `json:"remaining"`
 	ETA         string   `json:"eta"`
 	Tags        []string `json:"tags"`
+	// Library is the reporting client library ("name"/"version"); the dashboard
+	// renders them as the chip "name@version". Criticity is the task's importance
+	// level, shown as a colour-coded chip and filterable.
+	Library        string `json:"library"`
+	LibraryVersion string `json:"library_version"`
+	Criticity      string `json:"criticity"`
 	// Liveness thresholds in seconds, derived by the server from the task's
 	// observed update cadence. The browser compares them against the time since
 	// this frame arrived to show the task as stalled (past StallSeconds) or dead
@@ -267,6 +273,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			Remaining:   p.RemainingTime(),
 			ETA:         p.ETA().Format(time.RFC3339),
 			Tags:        p.Tags,
+
+			Library:        p.Library,
+			LibraryVersion: p.LibraryVersion,
+			Criticity:      string(p.EffectiveCriticity()),
 
 			StallSeconds: routed.StallSeconds,
 			DeadSeconds:  routed.DeadSeconds,

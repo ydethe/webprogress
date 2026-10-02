@@ -51,6 +51,72 @@ func TestUnmarshalWireContract(t *testing.T) {
 	if p.Tags != nil {
 		t.Errorf("tags should be nil when absent, got %v", p.Tags)
 	}
+	// A pre-v4 client omits library/criticity; they decode empty and criticity
+	// falls back to the default STANDARD.
+	if p.Library != "" || p.LibraryVersion != "" || p.Criticity != "" {
+		t.Errorf("library/criticity should be empty when absent: %+v", p)
+	}
+	if p.EffectiveCriticity() != CriticityStandard {
+		t.Errorf("empty criticity should default to standard, got %q", p.EffectiveCriticity())
+	}
+}
+
+func TestUnmarshalLibraryAndCriticity(t *testing.T) {
+	var p ClientPayload
+	body := `{"user_hostname":"h","script":"s","description":"d","library":"webprogress","library_version":"1.2.3","criticity":"critical","key":"k"}`
+	if err := json.Unmarshal([]byte(body), &p); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if p.Library != "webprogress" || p.LibraryVersion != "1.2.3" {
+		t.Errorf("library fields = %q/%q", p.Library, p.LibraryVersion)
+	}
+	if p.LibraryLabel() != "webprogress@1.2.3" {
+		t.Errorf("LibraryLabel = %q, want webprogress@1.2.3", p.LibraryLabel())
+	}
+	if p.EffectiveCriticity() != CriticityCritical {
+		t.Errorf("EffectiveCriticity = %q, want critical", p.EffectiveCriticity())
+	}
+}
+
+func TestLibraryLabel(t *testing.T) {
+	cases := []struct {
+		name, version, want string
+	}{
+		{"webprogress", "1.2.3", "webprogress@1.2.3"},
+		{"webprogress", "", "webprogress"}, // name only when no version
+		{"", "1.2.3", ""},                  // no library at all
+		{"", "", ""},
+	}
+	for _, c := range cases {
+		p := ClientPayload{Library: c.name, LibraryVersion: c.version}
+		if got := p.LibraryLabel(); got != c.want {
+			t.Errorf("LibraryLabel(%q,%q) = %q, want %q", c.name, c.version, got, c.want)
+		}
+	}
+}
+
+func TestCriticityNotificationGates(t *testing.T) {
+	cases := []struct {
+		crit                  Criticity
+		complete, stall, dead bool
+	}{
+		{CriticityTrivial, false, false, false},
+		{CriticityStandard, false, false, true},
+		{CriticityCritical, true, true, true},
+	}
+	for _, c := range cases {
+		if c.crit.NotifyOnComplete() != c.complete ||
+			c.crit.NotifyOnStall() != c.stall ||
+			c.crit.NotifyOnDead() != c.dead {
+			t.Errorf("%s gates = (%v,%v,%v), want (%v,%v,%v)", c.crit,
+				c.crit.NotifyOnComplete(), c.crit.NotifyOnStall(), c.crit.NotifyOnDead(),
+				c.complete, c.stall, c.dead)
+		}
+	}
+	// An empty/unknown value normalises to the STANDARD gates.
+	if got := (ClientPayload{Criticity: "bogus"}).EffectiveCriticity(); got != CriticityStandard {
+		t.Errorf("unknown criticity = %q, want standard", got)
+	}
 }
 
 func TestStatus(t *testing.T) {

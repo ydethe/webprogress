@@ -15,7 +15,9 @@ import "time"
 // v2 adds the optional `tags` field to ClientPayload.
 // v3 adds the client-assigned `uuid` field, one per task run, so the dashboard
 // tells successive runs of the same task apart instead of reviving the old card.
-const ProtocolVersion = 3
+// v4 adds the reporter's `library`/`library_version` (which client library and
+// version is reporting) and the task `criticity` (which gates notifications).
+const ProtocolVersion = 4
 
 // ServerInfo is the handshake response returned by GET /version. A client reads
 // it first, before it starts reporting, so it can tailor the protocol it uses to
@@ -61,6 +63,19 @@ type ClientPayload struct {
 	// filtered on; they are not part of the task identity. Added in protocol v2;
 	// an older client omits the field and it decodes to nil.
 	Tags []string `json:"tags"`
+	// Library and LibraryVersion identify the reporting client library and its
+	// version — e.g. "webprogress" and "1.2.3", shown on the dashboard as the chip
+	// "webprogress@1.2.3" (see LibraryLabel) and filterable there. They are display
+	// metadata, not part of the task identity. Added in protocol v4; an older
+	// client omits them and they decode to "".
+	Library        string `json:"library"`
+	LibraryVersion string `json:"library_version"`
+	// Criticity is the task's importance, set by the reporter, that gates which
+	// notifications fire for it (see Criticity and EffectiveCriticity). It is shown
+	// as a colour-coded chip on the dashboard and filterable there. Added in
+	// protocol v4; an older client omits it and it decodes to "", treated as the
+	// default CriticityStandard.
+	Criticity Criticity `json:"criticity"`
 }
 
 // TaskKey identifies a task on the dashboard: the triple (script, origin host,
@@ -81,6 +96,63 @@ func (p ClientPayload) InstanceKey() string {
 		return p.UUID
 	}
 	return p.TaskKey()
+}
+
+// Criticity is a task's importance level, assigned by the reporter, that decides
+// which out-of-band notifications fire for it. It is carried on the wire (added
+// in protocol v4) and shown as a colour-coded chip on the dashboard. The empty
+// value is treated as CriticityStandard (see EffectiveCriticity), so a pre-v4
+// client that sends nothing still gets sensible behaviour.
+type Criticity string
+
+const (
+	// CriticityTrivial silences every notification for the task.
+	CriticityTrivial Criticity = "trivial"
+	// CriticityStandard (the default) notifies only when the task is presumed
+	// dead — i.e. it went silent for longer than its dead threshold.
+	CriticityStandard Criticity = "standard"
+	// CriticityCritical notifies in every case: on stall, on dead, and on
+	// completion.
+	CriticityCritical Criticity = "critical"
+)
+
+// EffectiveCriticity returns the task's criticity, mapping the empty/unknown
+// value (e.g. from a pre-v4 client) to the default CriticityStandard.
+func (p ClientPayload) EffectiveCriticity() Criticity {
+	switch p.Criticity {
+	case CriticityTrivial, CriticityCritical:
+		return p.Criticity
+	default:
+		return CriticityStandard
+	}
+}
+
+// NotifyOnComplete reports whether a completion notification should fire for a
+// task of this criticity: only CRITICAL tasks are announced on completion.
+func (c Criticity) NotifyOnComplete() bool { return c == CriticityCritical }
+
+// NotifyOnStall reports whether a (recoverable) stall notification should fire:
+// only CRITICAL tasks are announced on a stall.
+func (c Criticity) NotifyOnStall() bool { return c == CriticityCritical }
+
+// NotifyOnDead reports whether a dead (presumed-gone) notification should fire:
+// STANDARD and CRITICAL tasks are both announced when they die; TRIVIAL is not.
+func (c Criticity) NotifyOnDead() bool {
+	return c == CriticityStandard || c == CriticityCritical
+}
+
+// LibraryLabel is the reporting library shown on the dashboard, rendered as
+// "name@version" (e.g. "webprogress@1.2.3"). It is the library name alone when no
+// version is known, and empty when the client sent no library. Derived, never
+// carried on the wire.
+func (p ClientPayload) LibraryLabel() string {
+	if p.Library == "" {
+		return ""
+	}
+	if p.LibraryVersion == "" {
+		return p.Library
+	}
+	return p.Library + "@" + p.LibraryVersion
 }
 
 // ScriptName is the group a task belongs to on the dashboard. Tasks reported

@@ -93,12 +93,18 @@ type TaskInfo struct {
 	Progress    float64 `json:"progress"`
 	Total       float64 `json:"total"`
 	Fraction    float64 `json:"fraction"`
+	// Library is the reporting client library as "name@version" (e.g.
+	// "webprogress@1.2.3"), empty when the reporter sent none. Criticity is the
+	// task's importance level ("trivial"/"standard"/"critical") that gated this
+	// notification. Both let a webhook receiver route on richer task metadata.
+	Library   string `json:"library"`
+	Criticity string `json:"criticity"`
 }
 
 // Message is a single rendered notification, independent of the channel that
 // will carry it.
 type Message struct {
-	Event string // "complete", "stalled", or "test"
+	Event string // "complete", "stalled", "dead", or "test"
 	Title string
 	Body  string
 	Task  TaskInfo
